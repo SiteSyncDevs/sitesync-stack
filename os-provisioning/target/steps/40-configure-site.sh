@@ -28,5 +28,6 @@ if [[ ! -r /dev/tty ]]; then
 fi
 
 cd "$DEST"
+export SITESYNC_AIRGAP=1
 bash setup.sh < /dev/tty || fail "setup did not complete. You can run it again at any time:
             cd $DEST && sudo bash setup.sh"

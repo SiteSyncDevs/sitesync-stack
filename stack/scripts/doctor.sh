@@ -220,6 +220,36 @@ if command -v ss >/dev/null 2>&1; then
   fi
 fi
 
+# --- are the container images actually on this machine? ---------------------
+# This is what catches an image that was left out of the airgap artifact. The
+# symptom otherwise is a container that will not start, or one that quietly
+# reaches out to a registry that may not be there.
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  _envf="$(mktemp)"
+  printf 'POSTGRES_PASSWORD=x\nCHIRPSTACK_API_SECRET=x\nREGION=%s\n' "${REGION:-eu868}" > "$_envf"
+  _prof="$(docker compose --profiles 2>/dev/null | paste -sd, - || true)"
+  _absent=()
+  while read -r img; do
+    [[ -z "$img" ]] && continue
+    docker image inspect "$img" >/dev/null 2>&1 || _absent+=("$img")
+  done < <(COMPOSE_PROFILES="${COMPOSE_PROFILES:-$_prof}" docker compose config --images 2>/dev/null | sed '/^$/d')
+  rm -f "$_envf"
+  if (( ${#_absent[@]} )); then
+    if [[ "${PULL_POLICY:-missing}" == never ]]; then
+      bad "these images are not on this machine, and PULL_POLICY=never:
+            ${_absent[*]}
+        They were left out of the install artifact. Load them with the image
+        bundle's load.sh, or rebuild the artifact with:
+            os-provisioning/build/prepare-airgap.sh --latest"
+    else
+      note "these images are not on this machine yet: ${_absent[*]}"
+      out+="            Docker will fetch them on first start, which needs internet."$'\n'
+    fi
+  else
+    ok "every container image this stack needs is already on this machine."
+  fi
+fi
+
 # --- compose file itself ----------------------------------------------------
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   if ERR="$(docker compose config -q 2>&1)"; then

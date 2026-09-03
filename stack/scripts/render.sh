@@ -27,8 +27,17 @@ randpw() {  # random password; avoids SIGPIPE under `set -o pipefail`
 set_password() {  # set_password <user> <plaintext>
   local flag=""
   [[ -f "$PASSWD" ]] || flag="-c"
+  # mosquitto_passwd runs as root inside the container and creates the file
+  # 0600 root:root. The broker then drops to the 'mosquitto' user and cannot
+  # read it -- "Unable to open pwfile" and the container restarts forever. So
+  # hand it to that user in the same step, while we are still root.
   docker run --rm -v "$PWD/configuration/mosquitto/config:/mosquitto/config" \
-    "$MOSQ_IMAGE" mosquitto_passwd -b $flag /mosquitto/config/passwd "$1" "$2" >/dev/null
+    "$MOSQ_IMAGE" sh -euc '
+      mosquitto_passwd -b $0 /mosquitto/config/passwd "$1" "$2" >/dev/null
+      chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null \
+        || chown 1883:1883 /mosquitto/config/passwd
+      chmod 640 /mosquitto/config/passwd
+    ' "$flag" "$1" "$2"
 }
 
 # Turn a role name into Mosquitto permission lines. This is the whole point of
@@ -116,13 +125,20 @@ EOF
       for k in "${KNOWN[@]}"; do [[ "$k" == "$existing" ]] && keep=1 && break; done
       if (( ! keep )); then
         docker run --rm -v "$PWD/configuration/mosquitto/config:/mosquitto/config" \
-          "$MOSQ_IMAGE" mosquitto_passwd -D /mosquitto/config/passwd "$existing" >/dev/null 2>&1 || true
+          "$MOSQ_IMAGE" sh -euc '
+            mosquitto_passwd -D /mosquitto/config/passwd "$1" >/dev/null 2>&1 || true
+            chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null \
+              || chown 1883:1883 /mosquitto/config/passwd
+            chmod 640 /mosquitto/config/passwd
+          ' _ "$existing" || true
         echo "  Removed MQTT user '$existing' (no longer listed in mqtt-users.conf)."
       fi
     done < "$PASSWD"
   fi
 
-  chmod 600 "$PASSWD" 2>/dev/null || true
+  # The ACL holds usernames and topic patterns, no secrets, and the broker
+  # must be able to read it whatever the operator's umask happens to be.
+  chmod 644 "$ACL" 2>/dev/null || true
 
   if [[ -n "$NEW_PASSWORDS" ]]; then
     printf '\n\033[1m  New MQTT passwords -- copy these now, they cannot be shown again\033[0m\n'

@@ -21,6 +21,7 @@ services:
   # ---------------------------------------------------------------------------
   caddy:
     image: caddy:${CADDY_VERSION:-2}
+    pull_policy: ${PULL_POLICY:-missing}
     restart: unless-stopped
     logging: *logging
     environment:
@@ -46,6 +47,7 @@ services:
   # ---------------------------------------------------------------------------
   chirpstack:
     image: chirpstack/chirpstack:${CHIRPSTACK_VERSION:-4}
+    pull_policy: ${PULL_POLICY:-missing}
     command: -c /etc/chirpstack
     restart: unless-stopped
     logging: *logging
@@ -80,6 +82,7 @@ services:
   # ---------------------------------------------------------------------------
   chirpstack-gateway-bridge:
     image: chirpstack/chirpstack-gateway-bridge:${GATEWAY_BRIDGE_VERSION:-4}
+    pull_policy: ${PULL_POLICY:-missing}
     restart: unless-stopped
     logging: *logging
     profiles: ["udp"]
@@ -106,6 +109,7 @@ services:
   # ---------------------------------------------------------------------------
   chirpstack-gateway-bridge-basicstation:
     image: chirpstack/chirpstack-gateway-bridge:${GATEWAY_BRIDGE_VERSION:-4}
+    pull_policy: ${PULL_POLICY:-missing}
     restart: unless-stopped
     logging: *logging
     profiles: ["basicstation"]
@@ -130,6 +134,7 @@ services:
   # ---------------------------------------------------------------------------
   chirpstack-rest-api:
     image: chirpstack/chirpstack-rest-api:${REST_API_VERSION:-4}
+    pull_policy: ${PULL_POLICY:-missing}
     restart: unless-stopped
     logging: *logging
     profiles: ["rest-api"]
@@ -144,6 +149,7 @@ services:
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:${POSTGRES_VERSION:-14-alpine}
+    pull_policy: ${PULL_POLICY:-missing}
     restart: unless-stopped
     logging: *logging
     volumes:
@@ -163,6 +169,7 @@ services:
 
   redis:
     image: redis:${REDIS_VERSION:-7-alpine}
+    pull_policy: ${PULL_POLICY:-missing}
     restart: unless-stopped
     logging: *logging
     command: redis-server --save 300 1 --save 60 100 --appendonly no
@@ -180,6 +187,7 @@ services:
   # ---------------------------------------------------------------------------
   mosquitto:
     image: eclipse-mosquitto:${MOSQUITTO_VERSION:-2}
+    pull_policy: ${PULL_POLICY:-missing}
     restart: unless-stopped
     logging: *logging
     ports:

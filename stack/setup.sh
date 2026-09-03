@@ -190,6 +190,14 @@ set_var CHIRPSTACK_API_SECRET "$(randstr 48)"
 set_var POSTGRES_PASSWORD "$(randstr 32)"
 p "Done. These are unique to this site and live only in .env."
 
+# An artifact install has every image loaded locally and usually no route to a
+# registry, so forbid pulling outright. A missing image then fails immediately
+# instead of hanging on an unreachable registry.
+if [[ "${SITESYNC_AIRGAP:-0}" == 1 ]]; then
+  set_var PULL_POLICY never
+  p "This is an offline install, so Docker is set never to contact a registry."
+fi
+
 chmod 600 .env 2>/dev/null || true
 
 # -----------------------------------------------------------------------------

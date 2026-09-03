@@ -42,13 +42,19 @@ ensure_files() {
 
 user_exists() { grep -qE "^[[:space:]]*$1[[:space:]]" "$USERS" 2>/dev/null; }
 
-# Write the password into the hashed file inside the broker image.
+# Write the password into the hashed file inside the broker image, and leave it
+# owned by the user the broker actually runs as. Skipping that ownership step
+# produces "Unable to open pwfile" and a broker that restarts forever.
 set_password() {
   local user="$1" pass="$2" flag=""
   [[ -f "$PASSWD" ]] || flag="-c"
   docker run --rm -v "$PWD/configuration/mosquitto/config:/mosquitto/config" \
-    "$MOSQ_IMAGE" mosquitto_passwd -b $flag /mosquitto/config/passwd "$user" "$pass" >/dev/null
-  chmod 600 "$PASSWD" 2>/dev/null || true
+    "$MOSQ_IMAGE" sh -euc '
+      mosquitto_passwd -b $0 /mosquitto/config/passwd "$1" "$2" >/dev/null
+      chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null \
+        || chown 1883:1883 /mosquitto/config/passwd
+      chmod 640 /mosquitto/config/passwd
+    ' "$flag" "$user" "$pass"
 }
 
 reload_broker() {
@@ -136,7 +142,12 @@ cmd_remove() {
   [[ "${a,,}" == y* ]] || { p "Nothing was changed."; exit 0; }
   grep -vE "^[[:space:]]*$user[[:space:]]" "$USERS" > "$USERS.tmp" && mv "$USERS.tmp" "$USERS"
   docker run --rm -v "$PWD/configuration/mosquitto/config:/mosquitto/config" \
-    "$MOSQ_IMAGE" mosquitto_passwd -D /mosquitto/config/passwd "$user" >/dev/null 2>&1 || true
+    "$MOSQ_IMAGE" sh -euc '
+      mosquitto_passwd -D /mosquitto/config/passwd "$1" >/dev/null 2>&1 || true
+      chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null \
+        || chown 1883:1883 /mosquitto/config/passwd
+      chmod 640 /mosquitto/config/passwd
+    ' _ "$user" || true
   bash scripts/render.sh >/dev/null
   reload_broker
   p "Removed '$user'."
