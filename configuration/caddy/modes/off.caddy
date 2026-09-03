@@ -1,0 +1,10 @@
+# TLS_MODE=off  --  plain HTTP, no encryption.
+# Answers on any hostname or IP address, so there is nothing to get wrong.
+
+:80 {
+	reverse_proxy chirpstack:8080
+}
+
+:8090 {
+	reverse_proxy chirpstack-rest-api:8090
+}

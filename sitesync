@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  sitesync -- the one command for running this ChirpStack site.
+#
+#  Usage:   ./sitesync <command>
+#  Run     ./sitesync help     to see everything it can do.
+# =============================================================================
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+HERE="$PWD"
+
+bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
+ok()    { printf '  \033[32mOK\033[0m    %s\n' "$*"; }
+warn()  { printf '  \033[33mCHECK\033[0m %s\n' "$*"; }
+bad()   { printf '  \033[31mPROBLEM\033[0m %s\n' "$*"; }
+info()  { printf '%s\n' "$*"; }
+die()   { printf '\n\033[31m%s\033[0m\n\n' "$*" >&2; exit 1; }
+
+DC=(docker compose)
+
+require_env() {
+  [[ -f .env ]] || die "There is no .env file here yet. Run:  ./setup.sh"
+  set -a; . ./.env; set +a
+}
+
+require_docker() {
+  command -v docker >/dev/null 2>&1 || die "Docker is not installed on this machine."
+  docker info >/dev/null 2>&1 || die "Docker is installed but not running. Start Docker and try again."
+  docker compose version >/dev/null 2>&1 || die "This machine has Docker but not the Compose plugin. Install docker-compose-plugin."
+}
+
+# The URL a person should type in their browser.
+site_url() {
+  local scheme=https port="${HTTPS_PORT:-443}"
+  if [[ "${TLS_MODE:-self-signed}" == "off" ]]; then scheme=http; port="${HTTP_PORT:-80}"; fi
+  if [[ ( "$scheme" == "https" && "$port" == "443" ) || ( "$scheme" == "http" && "$port" == "80" ) ]]; then
+    echo "$scheme://${SITE_DOMAIN:-localhost}"
+  else
+    echo "$scheme://${SITE_DOMAIN:-localhost}:$port"
+  fi
+}
+
+# -----------------------------------------------------------------------------
+cmd_help() {
+  cat <<'TXT'
+
+  sitesync -- run and change this ChirpStack site
+
+  EVERYDAY
+    ./sitesync status        Is everything running? Where do I point my browser?
+    ./sitesync apply         I changed .env -- make it take effect.
+    ./sitesync logs [name]   Show what a service is saying. Ctrl-C to stop.
+    ./sitesync doctor        Check the settings and tell me what is wrong.
+
+  STARTING AND STOPPING
+    ./sitesync start         Start the site.
+    ./sitesync stop          Stop the site. Data is kept.
+    ./sitesync restart       Stop then start.
+
+  LOOKING AFTER IT
+    ./sitesync backup        Save the database and settings into backups/
+    ./sitesync restore FILE  Put a backup back. Asks before overwriting.
+    ./sitesync update        Move to newer software, safely, with a backup first.
+    ./sitesync pin           Lock the exact versions now running, for repeat installs.
+
+  MQTT USERS  (dashboards, historians, gateways with their own bridge)
+    ./sitesync mqtt list             Who can connect, and what they may do.
+    ./sitesync mqtt add NAME ROLE    Add someone. Shows the password once.
+    ./sitesync mqtt reset NAME       They lost the password. Gives a new one.
+    ./sitesync mqtt remove NAME      Stop them connecting.
+    ./sitesync mqtt roles            What the roles mean.
+    ./sitesync mqtt show NAME        Connection details to paste into a ticket.
+
+  HANDING DETAILS TO OTHERS
+    ./sitesync mqtt-info     Print ChirpStack's own MQTT settings.
+    ./sitesync ca            Save the self-signed certificate so browsers trust it.
+
+TXT
+}
+
+# -----------------------------------------------------------------------------
+# Turn the .env settings into the small generated config files that Mosquitto
+# reads. Safe to run any number of times.
+cmd_render() {
+  require_env
+  bash scripts/render.sh
+}
+
+cmd_start() {
+  require_docker; require_env; cmd_render
+  bold "Starting ${SITE_LABEL:-this site}..."
+  "${DC[@]}" up -d
+  echo
+  cmd_status
+}
+
+cmd_stop() {
+  require_docker; require_env
+  "${DC[@]}" down
+  info "Stopped. Nothing was deleted -- ./sitesync start brings it back."
+}
+
+cmd_restart() { cmd_stop; cmd_start; }
+
+cmd_apply() {
+  require_docker; require_env
+  bold "Checking your settings first..."
+  if ! cmd_doctor --quiet-on-success; then
+    die "Not applying anything until the problems above are fixed."
+  fi
+  cmd_render
+  bold "Applying changes..."
+  # --remove-orphans cleans up services you switched off in COMPOSE_PROFILES.
+  "${DC[@]}" up -d --remove-orphans
+  echo
+  cmd_status
+}
+
+cmd_status() {
+  require_docker; require_env
+  bold "${SITE_LABEL:-ChirpStack site}  (region ${REGION:-?})"
+  "${DC[@]}" ps --format 'table {{.Service}}\t{{.Status}}' || true
+  echo
+  info "Web interface:  $(site_url)"
+  if [[ "${TLS_MODE:-}" == "self-signed" ]]; then
+    info "                (your browser will warn once about the certificate -- that is expected)"
+  fi
+  case ",${COMPOSE_PROFILES:-}," in *,rest-api,*)
+    local s=https p="${REST_API_PORT:-8090}"
+    [[ "${TLS_MODE:-}" == "off" ]] && s=http
+    info "REST API:       $s://${SITE_DOMAIN:-localhost}:$p" ;;
+  esac
+  echo
+  info "Gateways connect to:"
+  case ",${COMPOSE_PROFILES:-}," in *,udp,*)
+    info "  UDP packet forwarder    ${SITE_DOMAIN:-this host} port ${UDP_PORT:-1700}/udp" ;;
+  esac
+  case ",${COMPOSE_PROFILES:-}," in *,basicstation,*)
+    info "  Basics Station          ${SITE_DOMAIN:-this host} port ${BASICSTATION_PORT:-3001}" ;;
+  esac
+}
+
+cmd_logs() {
+  require_docker; require_env
+  if [[ $# -gt 0 ]]; then "${DC[@]}" logs -f --tail=200 "$1"
+  else "${DC[@]}" logs -f --tail=100; fi
+}
+
+cmd_mqtt_info() {
+  require_env
+  bold "MQTT connection details for ${SITE_LABEL:-this site}"
+  echo
+  info "  Host          ${SITE_DOMAIN:-this host}"
+  info "  Port          ${MQTT_PORT:-1883}   (plain)"
+  if [[ "${MQTT_TLS:-off}" != "off" ]]; then
+    info "  Port          ${MQTT_TLS_PORT:-8883}   (encrypted)"
+    info "  CA to trust   certs/mqtt-ca.pem  -- copy this onto each gateway"
+  fi
+  if [[ "${MQTT_AUTH_ENABLED:-true}" == "true" ]]; then
+    info "  Username      ${MQTT_USERNAME:-chirpstack}"
+    info "  Password      ${MQTT_PASSWORD:-<not set -- run ./setup.sh>}"
+  else
+    info "  Login         not required"
+  fi
+  info "  Topic prefix  ${REGION:-?}"
+  echo
+  warn "This output contains a password. Do not paste it into a ticket or chat."
+}
+
+cmd_ca() {
+  require_docker; require_env
+  [[ "${TLS_MODE:-}" == "self-signed" ]] || die "This only applies when TLS_MODE=self-signed."
+  mkdir -p certs
+  docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt certs/sitesync-root-ca.crt \
+    || die "Could not read the certificate. Is the site running? Try ./sitesync start"
+  bold "Saved to certs/sitesync-root-ca.crt"
+  info "Install this file on any computer that should not see the browser warning:"
+  info "  Windows  double-click, Install Certificate, Local Machine, Trusted Root Certification Authorities"
+  info "  macOS    double-click, then set it to Always Trust in Keychain Access"
+}
+
+cmd_backup()  { require_docker; require_env; bash scripts/backup.sh; }
+cmd_restore() { require_docker; require_env; bash scripts/restore.sh "$@"; }
+cmd_update()  { require_docker; require_env; bash scripts/update.sh; }
+cmd_pin()     { require_docker; require_env; bash scripts/pin.sh; }
+cmd_doctor()  { require_env; bash scripts/doctor.sh "$@"; }
+cmd_mqtt()    { require_docker; require_env; bash scripts/mqtt.sh "$@"; }
+
+# -----------------------------------------------------------------------------
+case "${1:-help}" in
+  help|-h|--help) cmd_help ;;
+  start|up)       cmd_start ;;
+  stop|down)      cmd_stop ;;
+  restart)        cmd_restart ;;
+  apply)          cmd_apply ;;
+  status|ps)      cmd_status ;;
+  logs)           shift; cmd_logs "$@" ;;
+  doctor|check)   shift || true; cmd_doctor "$@" ;;
+  render)         cmd_render ;;
+  backup)         cmd_backup ;;
+  restore)        shift; cmd_restore "$@" ;;
+  update)         cmd_update ;;
+  pin)            cmd_pin ;;
+  mqtt)           shift; cmd_mqtt "$@" ;;
+  mqtt-info)      cmd_mqtt_info ;;
+  ca)             cmd_ca ;;
+  *) die "I do not know the command '$1'. Run ./sitesync help" ;;
+esac

@@ -1,0 +1,28 @@
+# =============================================================================
+#  MQTT users
+# =============================================================================
+#  One line per person or system that connects to MQTT from OUTSIDE this stack:
+#  a customer dashboard, Node-RED, a historian, a gateway with its own bridge.
+#
+#  ChirpStack's own internal connection is NOT listed here -- that one lives in
+#  .env as MQTT_USERNAME / MQTT_PASSWORD. Leave it alone.
+#
+#  Format:     username    role
+#  Roles:      integration      read application data only          <- most common
+#              integration-rw   read application data, send downlinks
+#              gateway          a gateway running its own bridge
+#              gateway:EUI      the same, locked to one gateway ID
+#
+#  You never write MQTT permission rules yourself. The role does it.
+#
+#  TO ADD SOMEONE, either:
+#      ./sitesync mqtt add acme-dashboard integration
+#  or add the line here yourself and run ./sitesync apply -- either way the
+#  password is generated and shown to you once.
+#
+#  Passwords are stored hashed and cannot be looked up later. That is on
+#  purpose. If someone loses theirs, they do not need you:
+#      ./sitesync mqtt reset acme-dashboard
+# =============================================================================
+
+# username              role

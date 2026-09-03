@@ -1,0 +1,22 @@
+# TLS_MODE=letsencrypt  --  real, trusted HTTPS. Free, renews itself.
+#
+# This mode fails unless ALL of these are true:
+#   - SITE_DOMAIN is a real domain name (not localhost, not an IP address)
+#   - that name resolves to this machine from the public internet
+#   - ports 80 and 443 reach this machine from the public internet
+#   - TLS_EMAIL is filled in
+# Run ./sitesync doctor and it will tell you which of these is not met.
+
+https://{$SITE_DOMAIN} {
+	tls {$TLS_EMAIL}
+	reverse_proxy chirpstack:8080
+}
+
+https://{$SITE_DOMAIN}:8090 {
+	tls {$TLS_EMAIL}
+	reverse_proxy chirpstack-rest-api:8090
+}
+
+http://{$SITE_DOMAIN} {
+	redir https://{host}{uri} permanent
+}

@@ -18,6 +18,9 @@ backups/
 /data
 /lorawan-devices
 
+# Build output from the os-provisioning bundlers, anywhere in the tree.
+artifacts/
+
 # Keep the template and the git config visible.
 !.gitattributes
 !.gitignore

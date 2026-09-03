@@ -1,0 +1,20 @@
+# TLS_MODE=self-signed  --  HTTPS using a certificate Caddy creates itself.
+# No domain, no internet, no paperwork. Browsers show a one-time warning.
+#
+# SITE_DOMAIN must be exactly what you type in the browser: a DNS name
+# (chirpstack.acme.local) or an IP address (192.168.1.50). The certificate is
+# issued for that value, so if it does not match, the warning will not go away.
+
+https://{$SITE_DOMAIN} {
+	tls internal
+	reverse_proxy chirpstack:8080
+}
+
+https://{$SITE_DOMAIN}:8090 {
+	tls internal
+	reverse_proxy chirpstack-rest-api:8090
+}
+
+http://{$SITE_DOMAIN} {
+	redir https://{host}{uri} permanent
+}

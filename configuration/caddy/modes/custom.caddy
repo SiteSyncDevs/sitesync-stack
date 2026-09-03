@@ -1,0 +1,20 @@
+# TLS_MODE=custom  --  HTTPS using a certificate you already have.
+#
+# Put your two files in the certs/ folder next to the .env file:
+#     certs/cert.pem    the certificate, including any intermediate chain
+#     certs/key.pem     the private key, not password protected
+# If your files are named differently, set TLS_CERT_FILE and TLS_KEY_FILE.
+
+https://{$SITE_DOMAIN} {
+	tls /certs/{$TLS_CERT_FILE} /certs/{$TLS_KEY_FILE}
+	reverse_proxy chirpstack:8080
+}
+
+https://{$SITE_DOMAIN}:8090 {
+	tls /certs/{$TLS_CERT_FILE} /certs/{$TLS_KEY_FILE}
+	reverse_proxy chirpstack-rest-api:8090
+}
+
+http://{$SITE_DOMAIN} {
+	redir https://{host}{uri} permanent
+}

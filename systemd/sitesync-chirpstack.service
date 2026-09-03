@@ -1,0 +1,21 @@
+# Starts this ChirpStack site automatically when the machine boots, and keeps
+# trying if Docker is not ready yet. Install it with:
+#     sudo bash systemd/install.sh
+[Unit]
+Description=SiteSync ChirpStack (__LABEL__)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=__DIR__
+ExecStart=__DIR__/sitesync start
+ExecStop=__DIR__/sitesync stop
+TimeoutStartSec=0
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
