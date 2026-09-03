@@ -166,6 +166,40 @@ else
   note "This site uses an external broker, so MQTT_TLS and the MQTT user commands do not apply."
 fi
 
+# --- certificate expiry -----------------------------------------------------
+# Nothing here should ever expire unnoticed. Warn months ahead, not on the day.
+if command -v openssl >/dev/null 2>&1; then
+  check_expiry() {  # check_expiry <file> <friendly name> <what to do>
+    [[ -f "$1" ]] || return 0
+    local end days
+    end="$(openssl x509 -enddate -noout -in "$1" 2>/dev/null | cut -d= -f2)" || return 0
+    [[ -n "$end" ]] || return 0
+    days=$(( ( $(date -d "$end" +%s 2>/dev/null || echo 0) - $(date +%s) ) / 86400 ))
+    if   (( days < 0 ));  then bad "$2 EXPIRED $(( -days )) days ago. $3"
+    elif (( days < 90 )); then bad "$2 expires in $days days. $3"
+    elif (( days < 365 )); then note "$2 expires in $days days (about $(( days / 30 )) months). $3"
+    else ok "$2 is valid for another $(( days / 365 )) year(s)."; fi
+  }
+  case "${MQTT_TLS:-off}" in
+    self-signed) check_expiry certs/mqtt-cert.pem "The MQTT certificate" \
+        "Delete certs/mqtt-cert.pem and certs/mqtt-key.pem, then run ./sitesync apply to make a new one." ;;
+    custom) check_expiry certs/mqtt-cert.pem "The MQTT certificate" "Replace it with a new one from whoever issued it." ;;
+  esac
+  if [[ "${TLS_MODE:-}" == "custom" ]]; then
+    check_expiry "certs/${TLS_CERT_FILE:-cert.pem}" "The web interface certificate" \
+      "Replace it with a new one from whoever issued it."
+  fi
+  check_expiry certs/sitesync-root-ca.crt "The exported root certificate" \
+    "Run ./sitesync ca again to export a fresh copy."
+fi
+
+if [[ "${TLS_MODE:-}" == "self-signed" ]]; then
+  note "Caddy renews the web certificate by itself (it lasts 12 hours and is reissued continuously)."
+  out+="            Its root authority lasts 10 years and is what you install on browsers."$'\n'
+  out+="            That authority lives in the caddydata volume -- ./sitesync backup now saves it,"$'\n'
+  out+="            so a rebuilt machine keeps the same one and browsers stay happy."$'\n'
+fi
+
 # --- ports ------------------------------------------------------------------
 if command -v ss >/dev/null 2>&1; then
   RUNNING_PORTS="$(docker compose ps -q 2>/dev/null | wc -l)"

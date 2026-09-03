@@ -33,6 +33,8 @@ SKIP_IMAGES=0
 COMPOSE_FILE=""
 FROM_LIST=""
 SURVEY=""
+STACK_DIR=""
+SKIP_STACK=0
 LATEST=0
 IMAGES_ONLY=0
 DOCKER_ARGS=()
@@ -46,6 +48,11 @@ Usage: prepare-airgap.sh [options]
   -a, --arch ARCH       Target arch (default: amd64)
       --skip-docker     Don't build the Docker Engine bundle
       --skip-images     Don't build the ChirpStack image bundle
+      --skip-stack      Don't include the ChirpStack stack itself (compose file,
+                        configuration/, sitesync). Only do this if the target
+                        already has them -- without the stack the images have
+                        nothing to run.
+      --stack-dir DIR   Where the stack repo is (default: this script's parent)
       --compose FILE    Include a compose file in the image bundle
       --images-only     UPDATE an existing site: current ChirpStack images
                         only, no Docker Engine. This is the one to run when a
@@ -79,6 +86,8 @@ while [[ $# -gt 0 ]]; do
     -a|--arch)      ARCH="$2"; shift 2 ;;
     --skip-docker)  SKIP_DOCKER=1; shift ;;
     --skip-images)  SKIP_IMAGES=1; shift ;;
+    --skip-stack)   SKIP_STACK=1; shift ;;
+    --stack-dir)    STACK_DIR="$2"; shift 2 ;;
     --compose)      COMPOSE_FILE="$2"; shift 2 ;;
     --images-only)  IMAGES_ONLY=1; LATEST=1; SKIP_DOCKER=1; shift ;;
     --latest)       LATEST=1; shift ;;
@@ -140,6 +149,18 @@ if (( ! SKIP_IMAGES )); then
   command -v docker >/dev/null || die "the image bundle needs a working docker on THIS host (or use --skip-images)"
   docker info >/dev/null 2>&1  || die "docker daemon not reachable on THIS host (or use --skip-images)"
 fi
+# build/ -> os-provisioning/ -> repo root -> stack/
+STACK_DIR="${STACK_DIR:-$(cd -- "$SELF_DIR/../../stack" 2>/dev/null && pwd || echo "$SELF_DIR/../../stack")}"
+if (( ! SKIP_STACK )); then
+  [[ -d "$STACK_DIR" ]] || die "--stack-dir not found: $STACK_DIR"
+  for req in docker-compose.yml sitesync setup.sh .env.example configuration/chirpstack; do
+    [[ -e "$STACK_DIR/$req" ]] || die "$STACK_DIR does not look like the stack repo (no $req).
+       Point at it with --stack-dir, or use --skip-stack to build without it."
+  done
+fi
+TARGET_DIR="$(cd -- "$SELF_DIR/../target" 2>/dev/null && pwd || echo "")"
+[[ -n "$TARGET_DIR" && -d "$TARGET_DIR" ]] || die "not found: $SELF_DIR/../target (the target-side installer)"
+
 [[ -z "$COMPOSE_FILE" || -f "$COMPOSE_FILE" ]] || die "--compose file not found: $COMPOSE_FILE"
 [[ -z "$FROM_LIST"    || -f "$FROM_LIST"    ]] || die "--from-list file not found: $FROM_LIST"
 
@@ -173,6 +194,50 @@ if (( ! SKIP_IMAGES )); then
   found=("$OUTER"/chirpstack-images-*.tar.gz "$OUTER"/chirpstack-images-*.tar)
   (( ${#found[@]} == 1 )) || die "expected exactly one image bundle tarball, got ${#found[@]}"
   IMAGE_TARBALL="$(basename "${found[0]}")"
+fi
+
+# ------------------------------------------------------------ 3. stack -------
+# The images are useless without the compose file and configuration/ beside
+# them. Carry them in the artifact so nothing is placed by hand on site.
+STACK_TARBALL=""
+STACK_COMMIT=""
+if (( ! SKIP_STACK )); then
+  log "3/3  ChirpStack stack snapshot"
+  STACK_TARBALL="stack.tar.gz"
+  if git -C "$STACK_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    STACK_COMMIT="$(git -C "$STACK_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    git -C "$STACK_DIR" diff --quiet 2>/dev/null || STACK_COMMIT="${STACK_COMMIT}-dirty"
+  fi
+
+  # Per-site secrets must never travel in an artifact that goes to a customer.
+  # These exclusions are the security boundary of this whole tool.
+  # stack/ contains only what belongs on a customer machine, so this is a
+  # directory boundary rather than a long exclude list. What remains to exclude
+  # is strictly per-site state that must never travel.
+  tar -czf "$OUTER/$STACK_TARBALL" -C "$STACK_DIR" \
+    --exclude='./.env' \
+    --exclude='./.env.bak.*' \
+    --exclude='./mqtt-users.conf' \
+    --exclude='./restored-env-*.txt' \
+    --exclude='./certs/*.pem' \
+    --exclude='./certs/*.crt' \
+    --exclude='./certs/*.key' \
+    --exclude='./backups' \
+    --exclude='./data' \
+    --exclude='./lorawan-devices' \
+    --exclude='./configuration/mosquitto/conf.d/*.conf' \
+    --exclude='./configuration/mosquitto/config/passwd' \
+    --exclude='./configuration/mosquitto/config/acl' \
+    .
+
+  # Refuse to ship an artifact containing a secret, rather than trusting the
+  # exclude list to be right.
+  leaked="$(tar -tzf "$OUTER/$STACK_TARBALL" \
+    | grep -E '(^|/)\.env$|(^|/)mqtt-users\.conf$|(^|/)passwd$|(^|/)acl$|\.pem$|\.key$|(^|/)restored-env-' \
+    || true)"
+  [[ -z "$leaked" ]] || die "refusing to build: the stack snapshot contains secrets:
+$leaked"
+  echo "    snapshot: $(du -h "$OUTER/$STACK_TARBALL" | cut -f1)${STACK_COMMIT:+  (commit $STACK_COMMIT)}"
 fi
 
 # ------------------------------------------------- resolve versions ---------
@@ -226,105 +291,20 @@ if (( LATEST )) && [[ -n "$IMAGE_TARBALL" ]]; then
 fi
 
 # --------------------------------------------------- ordered installer -------
-cat > "$OUTER/install-all.sh" <<'RUNALL'
-#!/usr/bin/env bash
-# Complete airgap install. Run on the target Ubuntu Server:
-#     sudo bash install-all.sh
-#
-# Runs the Docker Engine install first, then loads the container images. That
-# order is not optional: images cannot be loaded without a running daemon.
-#
-# Optional, for a VM with a separate data drive:
-#     sudo bash install-all.sh --data-root /mnt/data/docker
-#     sudo bash install-all.sh --data-root auto
-# With no flag it offers any separate filesystem it finds, defaulting to the
-# OS drive.
-#
-# Container log rotation is applied by default (10m x 3 per container).
-# Override with --log-max-size / --log-max-file, or skip with --no-log-config.
-set -Eeuo pipefail
-
-HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-cd "$HERE"
-. "$HERE/AIRGAP_INFO"
-
-# Passed straight through to the engine installer. Nothing about the data
-# location is baked into this artifact - one artifact serves every customer.
-#   --data-root /mnt/data/docker | --data-root auto | --no-data-root
-PASSTHRU=()
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --data-root)     PASSTHRU+=(--data-root "${2:-}"); shift 2 ;;
-    --no-data-root)  PASSTHRU+=(--no-data-root); shift ;;
-    --log-max-size)  PASSTHRU+=(--log-max-size "${2:-}"); shift 2 ;;
-    --log-max-file)  PASSTHRU+=(--log-max-file "${2:-}"); shift 2 ;;
-    --no-log-config) PASSTHRU+=(--no-log-config); shift ;;
-    -h|--help)      sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "unknown option: $1" >&2; exit 2 ;;
-  esac
+# The installer is NOT generated here. It lives as real files in
+# os-provisioning/target/ so it can be shellchecked, tested and read in a diff
+# like any other code. It is copied in verbatim.
+log "adding the target-side installer"
+cp -a "$TARGET_DIR/install-all.sh" "$OUTER/install-all.sh"
+cp -a "$TARGET_DIR/steps" "$OUTER/steps"
+# The uninstaller ships too, so a bad install can be undone on site without
+# waiting for someone to send a script.
+for extra in uninstall-all.sh target-survey.sh; do
+  [[ -f "$TARGET_DIR/$extra" ]] && cp -a "$TARGET_DIR/$extra" "$OUTER/$extra"
 done
-
-banner() { printf '\n########################################\n# %s\n########################################\n' "$*"; }
-ok()   { printf '   [ ok ] %s\n' "$*"; }
-fail() { printf '\nFAILED: %s\n' "$*" >&2; exit 1; }
-
-[[ ${EUID:-$(id -u)} -eq 0 ]] || fail "must run as root:  sudo bash install-all.sh"
-
-banner "Verifying transfer integrity"
-sha256sum -c --quiet SHA256SUMS || fail "checksum mismatch - re-copy the whole folder"
-ok "all archives intact"
-
-if [[ -n "${AIRGAP_DOCKER_TARBALL:-}" ]]; then
-  banner "Step 1 of 2: Docker Engine"
-  d="${AIRGAP_DOCKER_TARBALL%.tar.gz}"
-  [[ -d "$d" ]] || tar xzf "$AIRGAP_DOCKER_TARBALL"
-  bash "$d/install.sh" "${PASSTHRU[@]+"${PASSTHRU[@]}"}" \
-    || fail "Docker Engine install failed (see above). Nothing else was attempted."
-else
-  banner "Checking Docker is already installed"
-  command -v docker >/dev/null || fail "docker is not installed on this machine, and this
-        artifact is an image update only. Run the full airgap artifact first."
-  docker info >/dev/null 2>&1  || fail "docker is installed but the daemon is not running:
-          sudo systemctl start docker"
-  ok "$(docker --version)"
-fi
-
-if [[ -n "${AIRGAP_IMAGE_TARBALL:-}" ]]; then
-  if [[ "${AIRGAP_MODE:-full}" == update ]]; then banner "Loading updated container images"
-  else banner "Step 2 of 2: container images"; fi
-  i="${AIRGAP_IMAGE_TARBALL%.tar.gz}"; i="${i%.tar}"
-  [[ -d "$i" ]] || tar xf "$AIRGAP_IMAGE_TARBALL"
-  bash "$i/load.sh" || fail "image load failed (see above)"
-else
-  banner "Container images - none in this artifact"
-fi
-
-banner "All done"
-if [[ "${AIRGAP_MODE:-full}" == update ]]; then
-cat <<'NEXT'
-   The new images are loaded, but NOTHING IS RUNNING THEM YET.
-   Loading images does not touch running containers - the stack is still
-   on the old ones until you recreate it.
-
-   Finish the update from the directory that holds your docker-compose.yml:
-
-       docker compose up -d
-
-   Then confirm and clean up:
-
-       docker compose ps
-       docker image prune        # drops the images the update replaced
-NEXT
-else
-cat <<'NEXT'
-   Remaining manual steps:
-     1. Log out and back in, so your user picks up the docker group.
-     2. Put the compose file and its ./configuration/ directory in place.
-     3. Check the region config (upstream ships EU868; US sites need us915).
-     4. docker compose up -d
-NEXT
-fi
-RUNALL
+chmod +x "$OUTER/install-all.sh" "$OUTER"/steps/*.sh
+chmod +x "$OUTER"/uninstall-all.sh "$OUTER"/target-survey.sh 2>/dev/null || true
+echo "    steps: $(cd "$OUTER/steps" && ls -1 *.sh | tr '\n' ' ')"
 
 cat > "$OUTER/AIRGAP_INFO" <<EOF
 AIRGAP_BUILT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -333,6 +313,8 @@ AIRGAP_ARCH="${ARCH}"
 AIRGAP_MODE="${MODE}"
 AIRGAP_DOCKER_TARBALL="${DOCKER_TARBALL}"
 AIRGAP_IMAGE_TARBALL="${IMAGE_TARBALL}"
+AIRGAP_STACK_TARBALL="${STACK_TARBALL}"
+AIRGAP_STACK_COMMIT="${STACK_COMMIT}"
 EOF
 
 if [[ "$MODE" == update ]]; then
@@ -352,9 +334,12 @@ INSTRUCTIONS
 
        sudo bash install-all.sh
 
-3. Then, from the directory containing your docker-compose.yml:
+The update loads the new images and refreshes the stack files, keeping this
+site's .env, certificates and MQTT users exactly as they are.
 
-       docker compose up -d
+3. Apply the update:
+
+       cd /opt/sitesync-chirpstack && ./sitesync apply
 
 Step 3 is required. Loading images does not restart anything - the stack
 keeps running the old images until the containers are recreated.
@@ -371,6 +356,7 @@ Built  : $(date -u +%Y-%m-%dT%H:%M:%SZ)
 Contents:
 $( [[ -n "$DOCKER_TARBALL" ]] && echo "  ${DOCKER_TARBALL}   Docker Engine, offline apt repo" )
 $( [[ -n "$IMAGE_TARBALL"  ]] && echo "  ${IMAGE_TARBALL}   ChirpStack container images" )
+$( [[ -n "$STACK_TARBALL"  ]] && echo "  ${STACK_TARBALL}                         the ChirpStack stack itself${STACK_COMMIT:+ (commit ${STACK_COMMIT})}" )
 $( [[ -n "$VERSIONS_TXT"   ]] && echo "  VERSIONS.txt                          what version of each image is inside" )
 
 INSTRUCTIONS
@@ -381,11 +367,25 @@ INSTRUCTIONS
 
        sudo bash install-all.sh
 
-Everything runs in the correct order and stops at the first real problem.
+It will ask you a short list of questions about this site near the end.
+
+Everything runs in the correct order and stops at the first real problem,
+leaving the machine in a state you can re-run from:
+
+       sudo bash install-all.sh --resume
+
 No internet connection is needed on the server.
 
-Each inner archive is a complete, self-contained bundle with its own README
-and its own installer, so either half can be run on its own if needed.
+WHAT IT DOES, IN ORDER
+  00  checks this machine before changing anything
+  10  installs Docker Engine from the offline package repo
+  20  loads the container images
+  30  installs the stack to /opt/sitesync-chirpstack
+  40  asks the site questions and writes the settings
+  50  starts it and prints the address
+
+Everything it prints is also saved to /var/log/sitesync-airgap/.
+That log is the one thing to send if you need help.
 EOF
 fi
 
@@ -456,6 +456,7 @@ Artifact ready.
   mode     : $( [[ "$MODE" == update ]] && echo 'IMAGE UPDATE (no Docker Engine)' || echo "full install - Ubuntu ${CODENAME} / ${ARCH}" )
   engine   : ${DOCKER_TARBALL:-(not included)}
   images   : ${IMAGE_TARBALL:-(skipped)}
+  stack    : ${STACK_TARBALL:-(not included)}${STACK_COMMIT:+  commit ${STACK_COMMIT}}
 $( [[ -n "$CS_VERSION" ]] && printf '  chirpstack: %s\n' "$CS_VERSION" )
 
 Hand off with:

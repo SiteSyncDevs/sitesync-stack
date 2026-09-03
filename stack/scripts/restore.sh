@@ -28,6 +28,15 @@ docker compose up -d postgres
 until docker compose exec -T postgres pg_isready -U chirpstack -d chirpstack >/dev/null 2>&1; do sleep 1; done
 docker compose exec -T postgres psql -U chirpstack -d chirpstack < "$WORK/database.sql" >/dev/null
 
+if [[ -d "$WORK/caddy-pki" ]]; then
+  echo "Restoring the certificate authority so browsers keep trusting this site..."
+  docker compose up -d caddy >/dev/null 2>&1 || true
+  docker compose cp "$WORK/caddy-pki/." caddy:/data/caddy/pki >/dev/null 2>&1 \
+    && docker compose restart caddy >/dev/null 2>&1 \
+    && echo "  Done -- the same certificate authority as before." \
+    || echo "  Could not restore it. Browsers will need to trust a new certificate (./sitesync ca)."
+fi
+
 echo
 echo "Database restored."
 echo "The settings from that backup are in $WORK/env.txt but were NOT applied,"
