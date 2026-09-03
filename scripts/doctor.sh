@@ -134,11 +134,37 @@ if [[ "${MQTT_AUTH_ENABLED:-true}" == "true" && -f mqtt-users.conf ]]; then
   fi
 fi
 
-case "${MQTT_TLS:-off}" in
-  off) note "MQTT traffic is not encrypted. Fine on a LAN or VPN; not over the public internet." ;;
-  self-signed|custom) ok "MQTT has an encrypted listener on port ${MQTT_TLS_PORT:-8883}." ;;
-  *) bad "MQTT_TLS is '${MQTT_TLS}'. It must be one of: off, self-signed, custom." ;;
+BURL="${MQTT_BROKER_URL:-tcp://mosquitto:1883}"
+case "$BURL" in
+  tcp://*|ws://*)
+    [[ -z "${MQTT_CA_CERT:-}" ]] || note "MQTT_CA_CERT is set but MQTT_BROKER_URL is '$BURL', which is not encrypted. The certificate is ignored." ;;
+  ssl://*|wss://*)
+    ok "ChirpStack connects to the broker over an encrypted connection."
+    if [[ -n "${MQTT_CA_CERT:-}" ]]; then
+      LOCAL="certs/${MQTT_CA_CERT##*/}"
+      [[ -f "$LOCAL" ]] && ok "Found the broker CA file $LOCAL" \
+        || bad "MQTT_CA_CERT is '$MQTT_CA_CERT' but there is no $LOCAL. Put the CA file in certs/."
+    else
+      note "MQTT_BROKER_URL uses $BURL with no MQTT_CA_CERT. That only works if the broker's certificate comes from a public authority."
+    fi
+    if [[ "$BURL" == *mosquitto:8883* && "${MQTT_TLS:-off}" == "off" ]]; then
+      bad "MQTT_BROKER_URL points at the bundled broker's encrypted port, but MQTT_TLS=off so that port is not listening."
+    fi ;;
+  *)
+    bad "MQTT_BROKER_URL is '$BURL'. It must start with tcp://, ssl://, ws:// or wss://." ;;
 esac
+
+# MQTT_TLS describes the bundled broker's own listener, which only matters if
+# this stack is actually using the bundled broker.
+if [[ "$BURL" == *mosquitto* ]]; then
+  case "${MQTT_TLS:-off}" in
+    off) note "The bundled broker accepts unencrypted connections only. Fine on a LAN or VPN; not over the public internet." ;;
+    self-signed|custom) ok "The bundled broker also has an encrypted listener on port ${MQTT_TLS_PORT:-8883}." ;;
+    *) bad "MQTT_TLS is '${MQTT_TLS}'. It must be one of: off, self-signed, custom." ;;
+  esac
+else
+  note "This site uses an external broker, so MQTT_TLS and the MQTT user commands do not apply."
+fi
 
 # --- ports ------------------------------------------------------------------
 if command -v ss >/dev/null 2>&1; then

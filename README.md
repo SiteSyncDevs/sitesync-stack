@@ -147,6 +147,36 @@ same users.
 
 ---
 
+## Pointing at a different broker
+
+Every component reads its broker URL from one line. There are no broker URLs
+anywhere else — not in the 39 region files, not in the gateway bridge configs.
+
+```bash
+MQTT_BROKER_URL=tcp://mosquitto:1883        # the bundled broker (default)
+MQTT_BROKER_URL=ssl://mqtt.customer.com:8883    # a broker they already run
+```
+
+If that broker uses a private or self-signed certificate, drop the CA file in
+`certs/` and name it:
+
+```bash
+MQTT_CA_CERT=/certs/customer-ca.pem
+```
+
+Then `./sitesync apply`. `doctor` cross-checks the two: it catches a missing CA
+file, a `ssl://` URL pointing at a port that is not listening, an unrecognised
+scheme, and a CA set on a plaintext connection.
+
+Note the difference between the two MQTT settings, because it is easy to
+conflate them:
+
+- `MQTT_TLS` — whether the **bundled** broker offers an encrypted listener.
+  Irrelevant if you point at an external broker.
+- `MQTT_BROKER_URL` — how ChirpStack and the bridges **connect out**.
+
+---
+
 ## What is and is not encrypted
 
 `TLS_MODE` covers the **web interface and REST API only**.

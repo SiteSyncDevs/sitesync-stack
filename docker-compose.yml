@@ -51,6 +51,7 @@ services:
     logging: *logging
     volumes:
       - ./configuration/chirpstack:/etc/chirpstack:ro
+      - ./certs:/certs:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -61,6 +62,8 @@ services:
     environment:
       - TZ=${TZ:-UTC}
       - MQTT_BROKER_HOST=mosquitto
+      - MQTT_BROKER_URL=${MQTT_BROKER_URL:-tcp://mosquitto:1883}
+      - MQTT_CA_CERT=${MQTT_CA_CERT:-}
       - REDIS_HOST=redis
       - POSTGRESQL_HOST=postgres
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?run ./setup.sh first}
@@ -84,11 +87,14 @@ services:
       - "${BIND_ADDRESS:-0.0.0.0}:${UDP_PORT:-1700}:1700/udp"
     volumes:
       - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge:ro
+      - ./certs:/certs:ro
     environment:
       - TZ=${TZ:-UTC}
       - INTEGRATION__MQTT__EVENT_TOPIC_TEMPLATE=${REGION}/gateway/{{ .GatewayID }}/event/{{ .EventType }}
       - INTEGRATION__MQTT__STATE_TOPIC_TEMPLATE=${REGION}/gateway/{{ .GatewayID }}/state/{{ .StateType }}
       - INTEGRATION__MQTT__COMMAND_TOPIC_TEMPLATE=${REGION}/gateway/{{ .GatewayID }}/command/#
+      - INTEGRATION__MQTT__AUTH__GENERIC__SERVERS=${MQTT_BROKER_URL:-tcp://mosquitto:1883}
+      - INTEGRATION__MQTT__AUTH__GENERIC__CA_CERT=${MQTT_CA_CERT:-}
       - INTEGRATION__MQTT__AUTH__GENERIC__USERNAME=${MQTT_USERNAME:-}
       - INTEGRATION__MQTT__AUTH__GENERIC__PASSWORD=${MQTT_PASSWORD:-}
     depends_on:
@@ -108,8 +114,11 @@ services:
       - "${BIND_ADDRESS:-0.0.0.0}:${BASICSTATION_PORT:-3001}:3001"
     volumes:
       - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge:ro
+      - ./certs:/certs:ro
     environment:
       - TZ=${TZ:-UTC}
+      - INTEGRATION__MQTT__AUTH__GENERIC__SERVERS=${MQTT_BROKER_URL:-tcp://mosquitto:1883}
+      - INTEGRATION__MQTT__AUTH__GENERIC__CA_CERT=${MQTT_CA_CERT:-}
       - INTEGRATION__MQTT__AUTH__GENERIC__USERNAME=${MQTT_USERNAME:-}
       - INTEGRATION__MQTT__AUTH__GENERIC__PASSWORD=${MQTT_PASSWORD:-}
     depends_on:
