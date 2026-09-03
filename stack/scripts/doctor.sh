@@ -66,9 +66,13 @@ case "${TLS_MODE:-}" in
   self-signed)
     ok "TLS_MODE=self-signed. Browsers will warn once; that is expected."
     if [[ "$DOMAIN" == "localhost" && "${BIND_ADDRESS:-0.0.0.0}" == "0.0.0.0" ]]; then
-      note "SITE_DOMAIN is 'localhost' but the site is reachable from the network."
-      out+="            People connecting from another computer will get a name mismatch."
-      out+=$'\n'"            Set SITE_DOMAIN to the name or IP address they actually type."$'\n'
+      _ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+      note "SITE_DOMAIN is 'localhost', so ONLY this machine can open the web interface."
+      out+="            Anyone connecting from another computer gets a refused connection,"$'\n'
+      out+="            because the certificate and the web server are both bound to that"$'\n'
+      out+="            exact name. Set SITE_DOMAIN to what people actually type:"$'\n'
+      out+="                SITE_DOMAIN=${_ip:-<the address of this machine>}"$'\n'
+      out+="            then run ./sitesync apply"$'\n'
     fi
     ;;
   letsencrypt)

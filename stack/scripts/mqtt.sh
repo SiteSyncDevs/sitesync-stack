@@ -46,15 +46,15 @@ user_exists() { grep -qE "^[[:space:]]*$1[[:space:]]" "$USERS" 2>/dev/null; }
 # owned by the user the broker actually runs as. Skipping that ownership step
 # produces "Unable to open pwfile" and a broker that restarts forever.
 set_password() {
-  local user="$1" pass="$2" flag=""
+  local user="$1" pass="$2" flag="" HOST_GID
+  HOST_GID="$(id -g)"
   [[ -f "$PASSWD" ]] || flag="-c"
   docker run --rm -v "$PWD/configuration/mosquitto/config:/mosquitto/config" \
     "$MOSQ_IMAGE" sh -euc '
       mosquitto_passwd -b $0 /mosquitto/config/passwd "$1" "$2" >/dev/null
-      chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null \
-        || chown 1883:1883 /mosquitto/config/passwd
+      chown 1883:"$3" /mosquitto/config/passwd
       chmod 640 /mosquitto/config/passwd
-    ' "$flag" "$user" "$pass"
+    ' "$flag" "$user" "$pass" "$HOST_GID"
 }
 
 reload_broker() {
@@ -144,10 +144,9 @@ cmd_remove() {
   docker run --rm -v "$PWD/configuration/mosquitto/config:/mosquitto/config" \
     "$MOSQ_IMAGE" sh -euc '
       mosquitto_passwd -D /mosquitto/config/passwd "$1" >/dev/null 2>&1 || true
-      chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null \
-        || chown 1883:1883 /mosquitto/config/passwd
+      chown 1883:"$2" /mosquitto/config/passwd
       chmod 640 /mosquitto/config/passwd
-    ' _ "$user" || true
+    ' _ "$user" "$(id -g)" || true
   bash scripts/render.sh >/dev/null
   reload_broker
   p "Removed '$user'."
@@ -162,7 +161,11 @@ cmd_list() {
     [[ -z "${user:-}" || "${user:0:1}" == "#" ]] && continue
     any=1
     local state="no password set"
-    grep -q "^$user:" "$PASSWD" 2>/dev/null && state="yes"
+    if [[ -f "$PASSWD" && ! -r "$PASSWD" ]]; then
+      state="cannot read the password file"
+    elif grep -q "^$user:" "$PASSWD" 2>/dev/null; then
+      state="yes"
+    fi
     printf '  %-22s %-16s %s\n' "$user" "$role" "$state"
   done < "$USERS"
   (( any )) || p "  (none yet -- add one with: ./sitesync mqtt add NAME integration)"
@@ -171,6 +174,11 @@ cmd_list() {
   p "  To give someone a new one:  ./sitesync mqtt reset NAME"
   p
   p "  ChirpStack's own internal login is separate and lives in .env."
+  if [[ -f "$PASSWD" && ! -r "$PASSWD" ]]; then
+    p
+    p "  NOTE: the password file cannot be read by $(id -un), so the column above"
+    p "  is unreliable. Fix it with:  ./sitesync apply"
+  fi
 }
 
 cmd_show() {

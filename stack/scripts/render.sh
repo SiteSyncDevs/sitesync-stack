@@ -24,6 +24,27 @@ randpw() {  # random password; avoids SIGPIPE under `set -o pipefail`
   printf '%s' "${s:0:${1:-24}}"
 }
 
+# The broker runs as uid 1883 and must read this file; so must the operator
+# running ./sitesync, which reads it to see who already has a password. Owner
+# 1883 covers the broker, the operator's own group covers the operator.
+HOST_GID="$(id -g)"
+
+# Repair a passwd file left unreadable by an earlier version (owner 1883,
+# group 1883, which locked out the very user running this). Only a root
+# container can change it back, and we already have one to hand.
+fix_passwd_perms() {
+  [[ -f "$PASSWD" ]] || return 0
+  [[ -r "$PASSWD" ]] && return 0
+  echo "  repairing permissions on $PASSWD ..."
+  docker run --rm -v "$PWD/configuration/mosquitto/config:/mosquitto/config" \
+    "$MOSQ_IMAGE" sh -euc '
+      chown 1883:"$1" /mosquitto/config/passwd
+      chmod 640 /mosquitto/config/passwd
+    ' _ "$HOST_GID" \
+    || { echo "Could not repair $PASSWD. Delete it and re-run: rm $PASSWD" >&2; return 1; }
+  [[ -r "$PASSWD" ]] || { echo "$PASSWD is still not readable by $(id -un). Delete it and re-run." >&2; return 1; }
+}
+
 set_password() {  # set_password <user> <plaintext>
   local flag=""
   [[ -f "$PASSWD" ]] || flag="-c"
@@ -34,10 +55,9 @@ set_password() {  # set_password <user> <plaintext>
   docker run --rm -v "$PWD/configuration/mosquitto/config:/mosquitto/config" \
     "$MOSQ_IMAGE" sh -euc '
       mosquitto_passwd -b $0 /mosquitto/config/passwd "$1" "$2" >/dev/null
-      chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null \
-        || chown 1883:1883 /mosquitto/config/passwd
+      chown 1883:"$3" /mosquitto/config/passwd
       chmod 640 /mosquitto/config/passwd
-    ' "$flag" "$1" "$2"
+    ' "$flag" "$1" "$2" "$HOST_GID"
 }
 
 # Turn a role name into Mosquitto permission lines. This is the whole point of
@@ -81,6 +101,8 @@ password_file /mosquitto/config/passwd
 acl_file /mosquitto/config/acl
 EOF
 
+  fix_passwd_perms || exit 1
+
   [[ -f "$USERS" ]] || cp mqtt-users.conf.example "$USERS"
 
   # ChirpStack's own internal login always exists and always has full access.
@@ -110,6 +132,11 @@ EOF
 
     # A user listed here but with no password yet is new. Give them one and
     # show it once -- it is stored hashed and cannot be recovered later.
+    if [[ -f "$PASSWD" && ! -r "$PASSWD" ]]; then
+      echo "$PASSWD exists but cannot be read by $(id -un)." >&2
+      echo "Delete it and run ./sitesync apply again to reissue passwords:  rm $PASSWD" >&2
+      exit 1
+    fi
     if ! grep -q "^$user:" "$PASSWD" 2>/dev/null; then
       pw="$(randpw)"
       set_password "$user" "$pw"
@@ -127,10 +154,9 @@ EOF
         docker run --rm -v "$PWD/configuration/mosquitto/config:/mosquitto/config" \
           "$MOSQ_IMAGE" sh -euc '
             mosquitto_passwd -D /mosquitto/config/passwd "$1" >/dev/null 2>&1 || true
-            chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null \
-              || chown 1883:1883 /mosquitto/config/passwd
+            chown 1883:"$2" /mosquitto/config/passwd
             chmod 640 /mosquitto/config/passwd
-          ' _ "$existing" || true
+          ' _ "$existing" "$HOST_GID" || true
         echo "  Removed MQTT user '$existing' (no longer listed in mqtt-users.conf)."
       fi
     done < "$PASSWD"

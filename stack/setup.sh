@@ -13,23 +13,33 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 b() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 p() { printf '%s\n' "$*"; }
 
+# Every prompt reads from the terminal. If there is no terminal -- piped output,
+# an automated run -- read fails immediately, and a loop around it would spin
+# forever with the installer looking frozen. So a failed read is fatal, loudly.
+no_tty() {
+  printf '\n%s\n' "setup.sh needs a terminal to ask its questions, and there is none here." >&2
+  printf '%s\n' "Run it directly on the console:  sudo bash setup.sh" >&2
+  exit 1
+}
+
 ask() {  # ask <prompt> <default> -> answer on stdout
-  local prompt="$1" default="${2:-}" reply
+  local prompt="$1" default="${2:-}" reply tries=0
   if [[ -n "$default" ]]; then
-    read -r -p "$prompt [$default]: " reply </dev/tty
+    read -r -p "$prompt [$default]: " reply </dev/tty || no_tty
     printf '%s' "${reply:-$default}"
   else
-    while :; do
-      read -r -p "$prompt: " reply </dev/tty
+    while (( tries++ < 20 )); do
+      read -r -p "$prompt: " reply </dev/tty || no_tty
       [[ -n "$reply" ]] && { printf '%s' "$reply"; return; }
       p "  (this one cannot be left blank)"
     done
+    printf '\n%s\n' "No answer after 20 tries; stopping." >&2; exit 1
   fi
 }
 
 yesno() {  # yesno <prompt> <default y|n>
   local reply
-  read -r -p "$1 [$( [[ ${2:-y} == y ]] && echo 'Y/n' || echo 'y/N' )]: " reply </dev/tty
+  read -r -p "$1 [$( [[ ${2:-y} == y ]] && echo 'Y/n' || echo 'y/N' )]: " reply </dev/tty || no_tty
   reply="${reply:-$2}"
   [[ "${reply,,}" == y* ]]
 }
@@ -113,11 +123,57 @@ esac
 set_var REGION "$REGION"
 
 # --- 3. address ---------------------------------------------------------------
-b "3 of 8  --  What will people type in their browser?"
-p "A DNS name (chirpstack.acme.local) or an IP address (192.168.1.50)."
-p "If you are not sure, an IP address is a safe answer and can be changed later."
-SITE_DOMAIN="$(ask 'Address' 'localhost')"
+# This machine's own address on the network, offered as the default. Guessing
+# "localhost" here is almost always wrong for a server other people connect to.
+guess_address() {
+  local ip=""
+  ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')"
+  [[ -z "$ip" ]] && ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  printf '%s' "${ip:-localhost}"
+}
+DEFAULT_ADDR="$(guess_address)"
+
+b "3 of 8  --  What address will people type in their browser?"
+p "This has to be EXACTLY what they type -- a DNS name (chirpstack.acme.local)"
+p "or an IP address (192.168.1.50). It is not just a label:"
+p ""
+p "  * the security certificate is issued for this exact value, and"
+p "  * the web server only answers to this exact value."
+p ""
+p "Get it wrong and the site refuses connections from other machines, or shows"
+p "a certificate warning that never goes away no matter what you click."
+p ""
+if [[ "$DEFAULT_ADDR" != localhost ]]; then
+  p "This machine appears to be at $DEFAULT_ADDR on the network."
+  p "Use that unless you have a DNS name pointing here, which is better because"
+  p "it survives the IP changing."
+else
+  p "I could not work out this machine's network address automatically."
+fi
+p ""
+p "Only answer 'localhost' if you will use ChirpStack from this machine and"
+p "nowhere else -- nobody on the network will be able to reach it."
+p ""
+_tries=0
+while (( _tries++ < 10 )); do
+  SITE_DOMAIN="$(ask 'Address' "$DEFAULT_ADDR")"
+  # People paste a whole URL. Take the hostname out of it rather than issuing a
+  # certificate for "https://1.2.3.4/".
+  SITE_DOMAIN="${SITE_DOMAIN#http://}"; SITE_DOMAIN="${SITE_DOMAIN#https://}"
+  SITE_DOMAIN="${SITE_DOMAIN%%/*}"; SITE_DOMAIN="${SITE_DOMAIN%%:*}"
+  [[ -n "$SITE_DOMAIN" ]] || continue
+  if [[ "$SITE_DOMAIN" == localhost ]]; then
+    p ""
+    p "  Just so it is not a surprise: with 'localhost', opening ChirpStack from"
+    p "  any other computer will fail. Only this machine will be able to use it."
+    yesno "  Really use localhost" n || { p ""; continue; }
+  fi
+  break
+done
 set_var SITE_DOMAIN "$SITE_DOMAIN"
+p ""
+p "Noted. People will reach this site at $SITE_DOMAIN"
+p "If that ever changes, edit SITE_DOMAIN in .env and run ./sitesync apply."
 
 # --- 4. TLS -------------------------------------------------------------------
 b "4 of 8  --  How should the web interface be secured?"
