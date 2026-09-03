@@ -13,9 +13,13 @@
 set -Eeuo pipefail
 
 # --------------------------------------------------------------- image set ---
-# Derived from the upstream chirpstack-docker compose. Note that
-# chirpstack-gateway-bridge appears twice there (udp + basicstation); it is one
-# image, listed once.
+# FALLBACK ONLY. The real list is read out of the compose file itself with
+# --from-compose, because a hand-maintained copy of it drifts: the caddy image
+# was added to the stack and missing here, which would have produced an
+# artifact whose stack could not start on an airgapped machine.
+#
+# chirpstack-gateway-bridge appears twice in compose (udp + basicstation);
+# it is one image, listed once.
 DEFAULT_IMAGES=(
   chirpstack/chirpstack:4
   chirpstack/chirpstack-gateway-bridge:4
@@ -23,6 +27,7 @@ DEFAULT_IMAGES=(
   postgres:14-alpine
   redis:7-alpine
   eclipse-mosquitto:2
+  caddy:2
 )
 
 # ---------------------------------------------------------------- defaults ---
@@ -30,6 +35,7 @@ PLATFORM="linux/amd64"
 OUTDIR=""                # default: ./artifacts
 NAME=""
 FROM_LIST=""
+FROM_COMPOSE=""
 COMPOSE_FILE=""
 EXTRA=()
 NO_PULL=0
@@ -47,6 +53,10 @@ Usage: chirpstack-image-bundle.sh [options]
       --from-list FILE    Reproducible rebuild: read an images.pinned file from
                           a previous bundle and pull those exact digests
       --compose FILE      Copy a compose file into the bundle for reference
+      --from-compose FILE Read the image list OUT of this compose file, so it
+                          can never disagree with what the stack actually runs.
+                          Every profile is included: the artifact must serve a
+                          customer whatever they switch on.
       --no-pull           Use whatever is already in the local image cache
       --no-compress       Emit .tar instead of .tar.gz
       --allow-arch-mismatch
@@ -69,6 +79,7 @@ while [[ $# -gt 0 ]]; do
     --only)      ONLY+=("$2"); shift 2 ;;
     --from-list) FROM_LIST="$2"; shift 2 ;;
     --compose)   COMPOSE_FILE="$2"; shift 2 ;;
+    --from-compose) FROM_COMPOSE="$2"; shift 2 ;;
     --no-pull)   NO_PULL=1; shift ;;
     --no-compress) NO_COMPRESS=1; shift ;;
     --allow-arch-mismatch) ALLOW_ARCH_MISMATCH=1; shift ;;
@@ -103,6 +114,16 @@ ref_tag() {
   if [[ "$last" == *:* ]]; then printf '%s' "${last##*:}"; else printf 'latest'; fi
 }
 
+# Read the images a compose file actually references, with every profile on.
+compose_images() {  # compose_images <compose-file>  -> one image per line
+  local f="$1" envf prof
+  envf="$(mktemp)"
+  printf 'POSTGRES_PASSWORD=x\nCHIRPSTACK_API_SECRET=x\nREGION=eu868\n' > "$envf"
+  prof="$(docker compose -f "$f" --env-file "$envf" config --profiles 2>/dev/null | paste -sd, - || true)"
+  COMPOSE_PROFILES="$prof" docker compose -f "$f" --env-file "$envf" config --images 2>/dev/null | sed '/^$/d'
+  rm -f "$envf"
+}
+
 # ------------------------------------------------------------ build the set --
 # TAGS[i]  = the friendly repo:tag the compose file references
 # PULLS[i] = what we actually pull (a digest ref when reproducing a bundle)
@@ -118,6 +139,21 @@ if [[ -n "$FROM_LIST" ]]; then
   log "reproducible rebuild from $FROM_LIST (${#TAGS[@]} pinned images)"
 else
   SET=("${DEFAULT_IMAGES[@]}")
+
+  # Read the image list straight out of the compose file. Every profile is
+  # enabled, and a scratch env file supplies only the variables compose refuses
+  # to run without -- so the versions resolved are the ${VAR:-default} ones the
+  # stack ships with, never whatever happens to be in a local .env.
+  if [[ -n "$FROM_COMPOSE" ]]; then
+    [[ -f "$FROM_COMPOSE" ]] || die "--from-compose file not found: $FROM_COMPOSE"
+    command -v docker >/dev/null || die "--from-compose needs docker on this host to read the compose file"
+    mapfile -t _derived < <(compose_images "$FROM_COMPOSE")
+    (( ${#_derived[@]} )) || die "could not read any images out of $FROM_COMPOSE.
+       Check it with:  docker compose -f $FROM_COMPOSE config --images"
+    SET=("${_derived[@]}")
+    log "image list read from $(basename "$FROM_COMPOSE") (${#_derived[@]} images, all profiles)"
+  fi
+
   (( ${#ONLY[@]} )) && SET=("${ONLY[@]}")
   (( ${#EXTRA[@]} )) && SET+=("${EXTRA[@]}")
   # dedupe, preserve order
@@ -129,6 +165,30 @@ fi
 
 log "${#TAGS[@]} image(s) for $PLATFORM"
 printf '    %s\n' "${TAGS[@]}"
+
+# Whatever built the list -- built-in set, --only, --from-list -- it must cover
+# every image the stack actually runs. An image missing here is not noticed
+# until a container will not start on a machine with no internet, which is the
+# worst possible place to find out.
+_check="${FROM_COMPOSE:-$COMPOSE_FILE}"
+if [[ -n "$_check" && -f "$_check" ]] && command -v docker >/dev/null; then
+  _missing=()
+  while read -r want; do
+    [[ -z "$want" ]] && continue
+    _base="${want%@*}"                       # ignore any digest suffix
+    _hit=0
+    for have in "${TAGS[@]}"; do [[ "${have%@*}" == "$_base" ]] && _hit=1 && break; done
+    (( _hit )) || _missing+=("$want")
+  done < <(compose_images "$_check")
+  if (( ${#_missing[@]} )); then
+    die "$(basename "$_check") runs these images, but they are not in this bundle:
+       ${_missing[*]}
+       The stack would fail to start on a machine with no internet.
+       Build with --from-compose $_check so the list is taken from the compose
+       file instead of a hand-maintained copy."
+  fi
+  echo "    verified: every image in $(basename "$_check") is in this bundle"
+fi
 
 # --------------------------------------------------------------- staging -----
 STAGE="$(mktemp -d /tmp/cs-images.XXXXXX)"

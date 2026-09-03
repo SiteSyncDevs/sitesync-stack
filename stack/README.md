@@ -60,6 +60,18 @@ a fix to `sitesync` itself to an existing site.
 time, so one artifact serves every customer and the answers all come from the
 wizard on site — the same reasoning as `--data-root` being an install-time flag.
 
+**Every container image travels as a tar in the artifact.** The image list is
+read out of `docker-compose.yml` itself (`--from-compose`), with every profile
+enabled, so it cannot fall out of step with what the stack runs. Before the
+bundle is written, the builder re-reads the compose file and refuses to build if
+any image it references is missing — a missing image is otherwise invisible
+until a container will not start on a machine with no internet.
+
+Nothing in `stack/` pulls an image at runtime except `eclipse-mosquitto`, which
+is bundled and is used to hash MQTT passwords. Generating a self-signed MQTT
+certificate uses the host's `openssl` rather than a container, for the same
+reason; `doctor` reports if it is missing.
+
 **No secrets ever travel in an artifact.** The bundler excludes `.env`,
 `certs/*.pem`, `mqtt-users.conf` and the generated broker files, then greps the
 finished tarball for them and refuses to build if any are present. The exclude

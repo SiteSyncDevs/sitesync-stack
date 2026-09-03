@@ -159,7 +159,15 @@ esac
 if [[ "$BURL" == *mosquitto* ]]; then
   case "${MQTT_TLS:-off}" in
     off) note "The bundled broker accepts unencrypted connections only. Fine on a LAN or VPN; not over the public internet." ;;
-    self-signed|custom) ok "The bundled broker also has an encrypted listener on port ${MQTT_TLS_PORT:-8883}." ;;
+    self-signed)
+      if command -v openssl >/dev/null 2>&1; then
+        ok "The bundled broker also has an encrypted listener on port ${MQTT_TLS_PORT:-8883}."
+      else
+        bad "MQTT_TLS=self-signed needs the 'openssl' command, which is not installed on this machine.
+            Install it with:  sudo apt-get install -y openssl
+            (this machine may have no internet, so do it before you need it)"
+      fi ;;
+    custom) ok "The bundled broker also has an encrypted listener on port ${MQTT_TLS_PORT:-8883}." ;;
     *) bad "MQTT_TLS is '${MQTT_TLS}'. It must be one of: off, self-signed, custom." ;;
   esac
 else

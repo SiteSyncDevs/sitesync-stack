@@ -144,18 +144,20 @@ case "${MQTT_TLS:-off}" in
   self-signed)
     if [[ ! -f certs/mqtt-cert.pem || ! -f certs/mqtt-key.pem ]]; then
       echo "Creating a self-signed MQTT certificate for ${SITE_DOMAIN:-localhost} ..."
-      if command -v openssl >/dev/null 2>&1; then
-        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-          -keyout certs/mqtt-key.pem -out certs/mqtt-cert.pem \
-          -subj "/CN=${SITE_DOMAIN:-localhost}" \
-          -addext "subjectAltName=DNS:${SITE_DOMAIN:-localhost}" 2>/dev/null
-      else
-        docker run --rm -v "$PWD/certs:/certs" alpine:3 sh -c \
-          "apk add --no-cache openssl >/dev/null && openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-             -keyout /certs/mqtt-key.pem -out /certs/mqtt-cert.pem \
-             -subj '/CN=${SITE_DOMAIN:-localhost}' \
-             -addext 'subjectAltName=DNS:${SITE_DOMAIN:-localhost}'" >/dev/null
-      fi
+      # Deliberately no container fallback here. Pulling an image to do this
+      # would reach the internet, and these machines often have none -- the
+      # failure would appear only at a customer site. openssl ships with
+      # Ubuntu Server.
+      command -v openssl >/dev/null 2>&1 || {
+        echo "MQTT_TLS=self-signed needs the 'openssl' command, which is not installed." >&2
+        echo "  Install it:   sudo apt-get install -y openssl" >&2
+        echo "  Or set MQTT_TLS=off in .env if you do not need encrypted MQTT." >&2
+        exit 1
+      }
+      openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+        -keyout certs/mqtt-key.pem -out certs/mqtt-cert.pem \
+        -subj "/CN=${SITE_DOMAIN:-localhost}" \
+        -addext "subjectAltName=DNS:${SITE_DOMAIN:-localhost}" 2>/dev/null
       cp certs/mqtt-cert.pem certs/mqtt-ca.pem
       chmod 600 certs/mqtt-key.pem 2>/dev/null || true
       echo "Done. Copy certs/mqtt-ca.pem onto each client so it trusts this broker."

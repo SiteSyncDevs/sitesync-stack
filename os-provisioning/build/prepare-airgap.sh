@@ -53,7 +53,9 @@ Usage: prepare-airgap.sh [options]
                         already has them -- without the stack the images have
                         nothing to run.
       --stack-dir DIR   Where the stack repo is (default: this script's parent)
-      --compose FILE    Include a compose file in the image bundle
+      --compose FILE    Compose file to read the image list from, and to
+                        include in the bundle. Defaults to the stack's own
+                        docker-compose.yml, which is almost always right.
       --images-only     UPDATE an existing site: current ChirpStack images
                         only, no Docker Engine. This is the one to run when a
                         site already has Docker and just needs new images.
@@ -187,7 +189,13 @@ IMAGE_TARBALL=""
 if (( ! SKIP_IMAGES )); then
   log "2/2  ChirpStack image bundle"
   args=(--platform "linux/${ARCH}" --out "$OUTER")
-  [[ -n "$COMPOSE_FILE" ]] && args+=(--compose "$COMPOSE_FILE")
+  # Default to the stack's own compose file, so the image list is READ from
+  # what the stack runs rather than kept in step with it by hand.
+  [[ -z "$COMPOSE_FILE" && -f "$STACK_DIR/docker-compose.yml" ]] && COMPOSE_FILE="$STACK_DIR/docker-compose.yml"
+  if [[ -n "$COMPOSE_FILE" ]]; then
+    args+=(--compose "$COMPOSE_FILE")
+    [[ -n "$FROM_LIST" ]] || args+=(--from-compose "$COMPOSE_FILE")
+  fi
   [[ -n "$FROM_LIST"    ]] && args+=(--from-list "$FROM_LIST")
   bash "$CHIRP_SH" "${args[@]}" "${IMAGE_ARGS[@]+"${IMAGE_ARGS[@]}"}"
   shopt -s nullglob
