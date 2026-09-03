@@ -391,8 +391,11 @@ apt-get "${APT[@]}" install -y $BUNDLE_PKGS || fail "apt install failed - see ou
 rm -f "$HERE/.aptsource.list"; rm -rf "$LISTS"
 
 # ------------------------------------------------------------ data root -----
-# Applied BEFORE the daemon's first start, so /var/lib/docker is never
-# populated and there is nothing to migrate afterwards.
+# Configured immediately after the package install, before anything is pulled
+# or run, so there is no real content to migrate. Note that the package install
+# has ALREADY started dockerd on the stock config by this point -- the
+# "Enabling services" step below restarts it, which is what makes any of this
+# take effect. Do not weaken that restart to 'enable --now'.
 data_candidates() {
   df -PB1 -x tmpfs -x devtmpfs -x squashfs -x overlay -x nfs -x nfs4 -x cifs 2>/dev/null \
     | awk 'NR>1 && $6!="/" && $4>=10737418240 {print $6, $4}' | sort -k2 -rn
@@ -544,14 +547,33 @@ PYMERGE
 fi
 
 say "Enabling services"
-systemctl enable --now containerd.service >/dev/null 2>&1 || true
-systemctl enable --now docker.socket >/dev/null 2>&1 || true
-systemctl enable --now docker.service || fail "docker.service would not start (journalctl -u docker)"
+# The package install already started dockerd, on the stock config and before
+# daemon.json existed. 'enable --now' does NOT restart a unit that is already
+# active, so it would leave the daemon running on /var/lib/docker while
+# daemon.json says otherwise -- enabled, healthy, and ignoring every setting
+# this installer just wrote. Enable and restart are therefore separate steps.
+systemctl enable containerd.service docker.socket docker.service >/dev/null 2>&1 || true
+systemctl restart containerd.service >/dev/null 2>&1 || true
+# docker.socket must go down with the daemon; a stale socket unit left active
+# across the restart hands connections to the old daemon's socket.
+systemctl stop docker.socket >/dev/null 2>&1 || true
+systemctl restart docker.service || fail "docker.service would not start (journalctl -u docker).
+        If daemon.json was just written, check it parses:  python3 -m json.tool /etc/docker/daemon.json"
+systemctl start docker.socket >/dev/null 2>&1 || true
 ok "docker.service enabled and running"
+
+# dockerd accepts connections on the socket slightly before it has finished
+# loading; asking too early gets an answer from a daemon that is still coming up.
+for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+
 if [[ -n "$DATA_ROOT" && "$DATA_ROOT" != none ]]; then
   ACTUAL="$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo unknown)"
   [[ "$ACTUAL" == "$DATA_ROOT" ]] \
-    || fail "docker reports its root dir as '$ACTUAL', expected '$DATA_ROOT'"
+    || fail "docker reports its root dir as '$ACTUAL', expected '$DATA_ROOT'.
+        The daemon is not reading /etc/docker/daemon.json. Check it:
+          cat /etc/docker/daemon.json
+          systemctl show docker -p ExecStart      # a --data-root here overrides the file
+          journalctl -u docker -n 40"
   ok "Docker root dir is $ACTUAL"
   DS="$(docker info -f '{{.DriverStatus}}' 2>/dev/null || echo '')"
   if [[ "$DS" == *"io.containerd.snapshotter"* ]]; then

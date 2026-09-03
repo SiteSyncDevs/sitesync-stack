@@ -283,7 +283,7 @@ if (( ! KEEP_DATA )); then
     run "rm -rf --one-file-system -- '$d'"
     ok "removed $d"
   done
-  (( ${#DELETABLE[@]:-0} )) || skip "nothing to remove"
+  (( ${#DELETABLE[@]} )) || skip "nothing to remove"
 fi
 
 # ---------------------------------------------------------------- group ------
@@ -318,7 +318,10 @@ done
 (( CLEAN )) && ok "no leftovers found"
 
 say "Done."
-if (( KEEP_PACKAGES || KEEP_DATA || KEEP_GROUP )); then
+if (( ! CLEAN )); then
+  echo "   Leftovers are listed above. Re-running is safe and usually clears them;"
+  echo "   if something persists, it was not created by this tooling."
+elif (( KEEP_PACKAGES || KEEP_DATA || KEEP_GROUP )); then
   echo "   Partial reset - some things were kept by request. Re-run without the"
   echo "   --keep-* flags for a full wipe."
 else
