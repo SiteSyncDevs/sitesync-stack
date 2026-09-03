@@ -1,81 +1,188 @@
+# =============================================================================
+#  SiteSync ChirpStack stack
+# =============================================================================
+#  You should not need to edit this file. Every value that differs between
+#  customers comes from the .env file sitting next to it.
+#  Change .env, then run:  ./sitesync apply
+# =============================================================================
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "${LOG_MAX_SIZE:-10m}"
+    max-file: "${LOG_MAX_FILES:-3}"
+
 services:
-  chirpstack:
-    image: chirpstack/chirpstack:4
-    command: -c /etc/chirpstack
-    restart: unless-stopped
-    volumes:
-      - ./configuration/chirpstack:/etc/chirpstack
-    depends_on:
-      - postgres
-      - mosquitto
-      - redis
-    environment:
-      - MQTT_BROKER_HOST=mosquitto
-      - REDIS_HOST=redis
-      - POSTGRESQL_HOST=postgres
-    ports:
-      - "8080:8080"
 
-  chirpstack-gateway-bridge:
-    image: chirpstack/chirpstack-gateway-bridge:4
+  # ---------------------------------------------------------------------------
+  # The front door. Terminates TLS according to TLS_MODE and forwards to the
+  # ChirpStack web interface. See configuration/caddy/modes/ for what each
+  # mode does.
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:${CADDY_VERSION:-2}
     restart: unless-stopped
-    ports:
-      - "1700:1700/udp"
-    volumes:
-      - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge
+    logging: *logging
     environment:
-      - INTEGRATION__MQTT__EVENT_TOPIC_TEMPLATE=eu868/gateway/{{ .GatewayID }}/event/{{ .EventType }}
-      - INTEGRATION__MQTT__STATE_TOPIC_TEMPLATE=eu868/gateway/{{ .GatewayID }}/state/{{ .StateType }}
-      - INTEGRATION__MQTT__COMMAND_TOPIC_TEMPLATE=eu868/gateway/{{ .GatewayID }}/command/#
-    depends_on:
-      - mosquitto
-  
-  chirpstack-gateway-bridge-basicstation:
-    image: chirpstack/chirpstack-gateway-bridge:4
-    restart: unless-stopped
-    command: -c /etc/chirpstack-gateway-bridge/chirpstack-gateway-bridge-basicstation-eu868.toml
+      - TLS_MODE=${TLS_MODE:-self-signed}
+      - SITE_DOMAIN=${SITE_DOMAIN:-localhost}
+      - TLS_EMAIL=${TLS_EMAIL:-}
+      - TLS_CERT_FILE=${TLS_CERT_FILE:-cert.pem}
+      - TLS_KEY_FILE=${TLS_KEY_FILE:-key.pem}
     ports:
-      - "3001:3001"
+      - "${BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-80}:80"
+      - "${BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:443"
+      - "${BIND_ADDRESS:-0.0.0.0}:${REST_API_PORT:-8090}:8090"
     volumes:
-      - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge
-    depends_on:
-      - mosquitto
-
-  chirpstack-rest-api:
-    image: chirpstack/chirpstack-rest-api:4
-    restart: unless-stopped
-    command: --server chirpstack:8080 --bind 0.0.0.0:8090 --insecure
-    ports:
-      - "8090:8090"
+      - ./configuration/caddy:/etc/caddy:ro
+      - ./certs:/certs:ro
+      - caddydata:/data
+      - caddyconfig:/config
     depends_on:
       - chirpstack
 
-  postgres:
-    image: postgres:14-alpine
+  # ---------------------------------------------------------------------------
+  # The LoRaWAN network server itself.
+  # ---------------------------------------------------------------------------
+  chirpstack:
+    image: chirpstack/chirpstack:${CHIRPSTACK_VERSION:-4}
+    command: -c /etc/chirpstack
     restart: unless-stopped
+    logging: *logging
     volumes:
-      - ./configuration/postgresql/initdb:/docker-entrypoint-initdb.d
+      - ./configuration/chirpstack:/etc/chirpstack:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    environment:
+      - TZ=${TZ:-UTC}
+      - MQTT_BROKER_HOST=mosquitto
+      - REDIS_HOST=redis
+      - POSTGRESQL_HOST=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?run ./setup.sh first}
+      - CHIRPSTACK_API_SECRET=${CHIRPSTACK_API_SECRET:?run ./setup.sh first}
+      - REGION=${REGION:?set REGION in .env}
+      - NET_ID=${NET_ID:-000000}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - MQTT_USERNAME=${MQTT_USERNAME:-}
+      - MQTT_PASSWORD=${MQTT_PASSWORD:-}
+
+  # ---------------------------------------------------------------------------
+  # Gateway bridge for gateways running the Semtech UDP packet forwarder.
+  # Turn off by removing "udp" from COMPOSE_PROFILES in .env.
+  # ---------------------------------------------------------------------------
+  chirpstack-gateway-bridge:
+    image: chirpstack/chirpstack-gateway-bridge:${GATEWAY_BRIDGE_VERSION:-4}
+    restart: unless-stopped
+    logging: *logging
+    profiles: ["udp"]
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${UDP_PORT:-1700}:1700/udp"
+    volumes:
+      - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge:ro
+    environment:
+      - TZ=${TZ:-UTC}
+      - INTEGRATION__MQTT__EVENT_TOPIC_TEMPLATE=${REGION}/gateway/{{ .GatewayID }}/event/{{ .EventType }}
+      - INTEGRATION__MQTT__STATE_TOPIC_TEMPLATE=${REGION}/gateway/{{ .GatewayID }}/state/{{ .StateType }}
+      - INTEGRATION__MQTT__COMMAND_TOPIC_TEMPLATE=${REGION}/gateway/{{ .GatewayID }}/command/#
+      - INTEGRATION__MQTT__AUTH__GENERIC__USERNAME=${MQTT_USERNAME:-}
+      - INTEGRATION__MQTT__AUTH__GENERIC__PASSWORD=${MQTT_PASSWORD:-}
+    depends_on:
+      - mosquitto
+
+  # ---------------------------------------------------------------------------
+  # Gateway bridge for gateways speaking the Basics Station protocol.
+  # Turn off by removing "basicstation" from COMPOSE_PROFILES in .env.
+  # ---------------------------------------------------------------------------
+  chirpstack-gateway-bridge-basicstation:
+    image: chirpstack/chirpstack-gateway-bridge:${GATEWAY_BRIDGE_VERSION:-4}
+    restart: unless-stopped
+    logging: *logging
+    profiles: ["basicstation"]
+    command: -c /etc/chirpstack-gateway-bridge/chirpstack-gateway-bridge-basicstation-${REGION}.toml
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${BASICSTATION_PORT:-3001}:3001"
+    volumes:
+      - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge:ro
+    environment:
+      - TZ=${TZ:-UTC}
+      - INTEGRATION__MQTT__AUTH__GENERIC__USERNAME=${MQTT_USERNAME:-}
+      - INTEGRATION__MQTT__AUTH__GENERIC__PASSWORD=${MQTT_PASSWORD:-}
+    depends_on:
+      - mosquitto
+
+  # ---------------------------------------------------------------------------
+  # REST / Swagger API. Reached through Caddy, so it is covered by TLS_MODE.
+  # Turn off by removing "rest-api" from COMPOSE_PROFILES in .env.
+  # ---------------------------------------------------------------------------
+  chirpstack-rest-api:
+    image: chirpstack/chirpstack-rest-api:${REST_API_VERSION:-4}
+    restart: unless-stopped
+    logging: *logging
+    profiles: ["rest-api"]
+    command: --server chirpstack:8080 --bind 0.0.0.0:8090 --insecure
+    environment:
+      - TZ=${TZ:-UTC}
+    depends_on:
+      - chirpstack
+
+  # ---------------------------------------------------------------------------
+  # Database. Its data lives in a Docker volume; ./sitesync backup dumps it.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-14-alpine}
+    restart: unless-stopped
+    logging: *logging
+    volumes:
+      - ./configuration/postgresql/initdb:/docker-entrypoint-initdb.d:ro
       - postgresqldata:/var/lib/postgresql/data
     environment:
+      - TZ=${TZ:-UTC}
       - POSTGRES_USER=chirpstack
-      - POSTGRES_PASSWORD=chirpstack
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?run ./setup.sh first}
       - POSTGRES_DB=chirpstack
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chirpstack -d chirpstack"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
 
   redis:
-    image: redis:7-alpine
+    image: redis:${REDIS_VERSION:-7-alpine}
     restart: unless-stopped
+    logging: *logging
     command: redis-server --save 300 1 --save 60 100 --appendonly no
     volumes:
       - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
+  # ---------------------------------------------------------------------------
+  # MQTT broker. Login requirement and the encrypted listener are written into
+  # configuration/mosquitto/conf.d by ./sitesync apply.
+  # ---------------------------------------------------------------------------
   mosquitto:
-    image: eclipse-mosquitto:2
+    image: eclipse-mosquitto:${MOSQUITTO_VERSION:-2}
     restart: unless-stopped
+    logging: *logging
     ports:
-      - "1883:1883"
-    volumes: 
-      - ./configuration/mosquitto/config/:/mosquitto/config/
+      - "${BIND_ADDRESS:-0.0.0.0}:${MQTT_PORT:-1883}:1883"
+      - "${BIND_ADDRESS:-0.0.0.0}:${MQTT_TLS_PORT:-8883}:8883"
+    volumes:
+      - ./configuration/mosquitto/config:/mosquitto/config
+      - ./configuration/mosquitto/conf.d:/mosquitto/conf.d:ro
+      - ./certs:/mosquitto/certs:ro
 
 volumes:
   postgresqldata:
   redisdata:
+  caddydata:
+  caddyconfig:
