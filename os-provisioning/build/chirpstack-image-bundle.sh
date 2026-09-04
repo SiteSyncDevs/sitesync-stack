@@ -115,13 +115,34 @@ ref_tag() {
 }
 
 # Read the images a compose file actually references, with every profile on.
+# The scratch env file supplies only the variables compose refuses to run
+# without, so the versions resolved are the ${VAR:-default} ones the stack
+# ships with rather than whatever a local .env happens to say. Keep this list
+# in step with the ${VAR:?...} entries in docker-compose.yml -- a missing one
+# makes config fail with nothing but "could not read any images".
+_compose_scratch_env() {
+  printf 'POSTGRES_PASSWORD=x\nCHIRPSTACK_API_SECRET=x\nRF_REGION=EU868\n'
+}
+
+# Errors here are reported, not swallowed. Hiding compose's stderr turned a
+# one-line "required variable RF_REGION is missing" into a guessing game.
+COMPOSE_IMAGES_ERR=""
 compose_images() {  # compose_images <compose-file>  -> one image per line
-  local f="$1" envf prof
-  envf="$(mktemp)"
-  printf 'POSTGRES_PASSWORD=x\nCHIRPSTACK_API_SECRET=x\nREGION=eu868\n' > "$envf"
-  prof="$(docker compose -f "$f" --env-file "$envf" config --profiles 2>/dev/null | paste -sd, - || true)"
-  COMPOSE_PROFILES="$prof" docker compose -f "$f" --env-file "$envf" config --images 2>/dev/null | sed '/^$/d'
+  local f="$1" envf prof out rc
+  local -a files=(-f "$f")
+  # The gateway bridges live in a generated second file. Include it when the
+  # build host happens to have one; the bridge image is added explicitly by
+  # prepare-airgap.sh either way, because that file is site-specific and is
+  # usually absent at build time.
+  local gw; gw="$(dirname "$f")/compose/gateways.yml"
+  [[ -f "$gw" ]] && files+=(-f "$gw")
+
+  envf="$(mktemp)"; _compose_scratch_env > "$envf"
+  prof="$(docker compose "${files[@]}" --env-file "$envf" config --profiles 2>/dev/null | paste -sd, - || true)"
+  out="$(COMPOSE_PROFILES="$prof" docker compose "${files[@]}" --env-file "$envf" config --images 2>&1)"; rc=$?
   rm -f "$envf"
+  if (( rc != 0 )); then COMPOSE_IMAGES_ERR="$out"; return 1; fi
+  printf '%s\n' "$out" | sed '/^$/d'
 }
 
 # ------------------------------------------------------------ build the set --
@@ -148,8 +169,13 @@ else
     [[ -f "$FROM_COMPOSE" ]] || die "--from-compose file not found: $FROM_COMPOSE"
     command -v docker >/dev/null || die "--from-compose needs docker on this host to read the compose file"
     mapfile -t _derived < <(compose_images "$FROM_COMPOSE")
-    (( ${#_derived[@]} )) || die "could not read any images out of $FROM_COMPOSE.
-       Check it with:  docker compose -f $FROM_COMPOSE config --images"
+    if (( ${#_derived[@]} == 0 )); then
+      die "could not read the image list out of $FROM_COMPOSE.
+       Docker said:
+$(printf '%s' "${COMPOSE_IMAGES_ERR:-(no output)}" | sed 's/^/         /')
+       Reproduce it with:
+         docker compose -f $FROM_COMPOSE config --images"
+    fi
     SET=("${_derived[@]}")
     log "image list read from $(basename "$FROM_COMPOSE") (${#_derived[@]} images, all profiles)"
   fi

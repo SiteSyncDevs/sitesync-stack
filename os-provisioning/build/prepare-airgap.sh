@@ -194,7 +194,15 @@ if (( ! SKIP_IMAGES )); then
   [[ -z "$COMPOSE_FILE" && -f "$STACK_DIR/docker-compose.yml" ]] && COMPOSE_FILE="$STACK_DIR/docker-compose.yml"
   if [[ -n "$COMPOSE_FILE" ]]; then
     args+=(--compose "$COMPOSE_FILE")
-    [[ -n "$FROM_LIST" ]] || args+=(--from-compose "$COMPOSE_FILE")
+    if [[ -z "$FROM_LIST" ]]; then
+      args+=(--from-compose "$COMPOSE_FILE")
+      # The gateway bridges are generated per site into compose/gateways.yml,
+      # so their image appears in NO tracked compose file and reading
+      # docker-compose.yml alone would leave it out of the artifact. Add it
+      # explicitly, at the version the stack ships with.
+      _gwv="$(sed -n 's/^GATEWAY_BRIDGE_VERSION=\(.*\)/\1/p' "$STACK_DIR/.env.example" 2>/dev/null | head -1)"
+      args+=(--image "chirpstack/chirpstack-gateway-bridge:${_gwv:-4}")
+    fi
   fi
   [[ -n "$FROM_LIST"    ]] && args+=(--from-list "$FROM_LIST")
   bash "$CHIRP_SH" "${args[@]}" "${IMAGE_ARGS[@]+"${IMAGE_ARGS[@]}"}"
