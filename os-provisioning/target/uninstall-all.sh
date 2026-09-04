@@ -38,6 +38,11 @@
 #   - /opt/sitesync-chirpstack and its .replaced-* copies (the stack, the site
 #     settings, certificates and MQTT users), plus /var/lib/sitesync-airgap
 #     (the install step markers that drive --resume)
+#   - the Ignition gateway: its service, the vendor uninstaller, the install
+#     directory and the user the installer created. Its data/ directory --
+#     projects, tag history, the internal database -- is TARRED to
+#     /var/log/sitesync-airgap first, next to the install logs, because that
+#     is the one part of a gateway nobody can rebuild from an artifact.
 
 set -Eeuo pipefail
 
@@ -47,10 +52,12 @@ AUTOREMOVE=0
 KEEP_PACKAGES=0
 KEEP_DATA=0
 KEEP_GROUP=0
+KEEP_IGNITION=0
+IGNITION_BACKUP=1
 EXTRA_ROOTS=()
 STACK_DIR_TARGET="${STACK_DIR_TARGET:-/opt/sitesync-chirpstack}"
 
-usage() { sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'; cat <<'EOF'
+usage() { sed -n '3,45p' "$0" | sed 's/^# \{0,1\}//'; cat <<'EOF'
 
 Options:
   -y, --yes            Don't prompt for confirmation
@@ -64,6 +71,12 @@ Options:
       --keep-packages  Wipe config and data only; leave Docker installed
       --keep-data      Remove packages; leave the data roots on disk
       --keep-group     Leave the 'docker' group and its members alone
+      --keep-ignition  Leave the Ignition gateway installed and running.
+                       Everything else is still removed.
+      --no-ignition-backup
+                       Do not archive Ignition's data/ before removing it.
+                       Faster, and the only way to guarantee no gateway data
+                       is left anywhere on the machine.
       --root PATH      Also remove this directory as a Docker/containerd root
                        (repeatable; for a root that can no longer be discovered
                        because daemon.json is already gone)
@@ -77,8 +90,14 @@ while [[ $# -gt 0 ]]; do
     -n|--dry-run)    DRY=1; shift ;;
     --autoremove)    AUTOREMOVE=1; shift ;;
     --keep-packages) KEEP_PACKAGES=1; shift ;;
-    --keep-data)     KEEP_DATA=1; shift ;;
+    # Ignition's data lives inside its install directory, so there is no way
+    # to honour "leave the data" and still remove the gateway. --keep-data
+    # therefore keeps the whole gateway; --no-ignition-backup + no --keep-data
+    # is the way to wipe it outright.
+    --keep-data)     KEEP_DATA=1; KEEP_IGNITION=1; shift ;;
     --keep-group)    KEEP_GROUP=1; shift ;;
+    --keep-ignition) KEEP_IGNITION=1; shift ;;
+    --no-ignition-backup) IGNITION_BACKUP=0; shift ;;
     --root)          EXTRA_ROOTS+=("${2:-}"); shift 2 ;;
     -h|--help)       usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -171,6 +190,42 @@ for d in "${ROOTS[@]+"${ROOTS[@]}"}"; do
   fi
 done
 
+# ------------------------------------------------------- discover ignition ---
+# Read where it went rather than assuming: install.sh writes ignition.info for
+# exactly this reason, because --ignition-dir means the location is a choice.
+# The fixed paths are the fallback for a gateway installed some other way, or
+# one whose install died before it could record itself.
+IGNITION_DIRS=()
+IGNITION_UNITS=()
+IGNITION_VER=""
+IGNITION_INFO=/var/lib/sitesync-airgap/ignition.info
+
+if [[ -f "$IGNITION_INFO" ]]; then
+  # shellcheck disable=SC1090
+  . "$IGNITION_INFO" 2>/dev/null || true
+  [[ -n "${IGNITION_LOCATION:-}" && -d "${IGNITION_LOCATION}" ]] && IGNITION_DIRS+=("$IGNITION_LOCATION")
+  [[ -n "${IGNITION_SERVICE_UNIT:-}" ]] && IGNITION_UNITS+=("$IGNITION_SERVICE_UNIT")
+  IGNITION_VER="${IGNITION_VERSION:-}"
+fi
+for d in /usr/local/bin/ignition /usr/local/ignition /opt/ignition; do
+  [[ -d "$d" ]] || continue
+  for seen in "${IGNITION_DIRS[@]+"${IGNITION_DIRS[@]}"}"; do [[ "$seen" == "$d" ]] && continue 2; done
+  IGNITION_DIRS+=("$d")
+done
+if command -v systemctl >/dev/null 2>&1; then
+  while read -r u; do
+    [[ -n "$u" ]] || continue
+    for seen in "${IGNITION_UNITS[@]+"${IGNITION_UNITS[@]}"}"; do [[ "$seen" == "$u" ]] && continue 2; done
+    IGNITION_UNITS+=("$u")
+  done < <(systemctl list-unit-files --no-legend 2>/dev/null \
+           | awk '$1 ~ /^([Ii]gnition|[Ii]gnition-Gateway|.*-Gateway)\.service$/ {print $1}')
+fi
+if (( ${#IGNITION_DIRS[@]} || ${#IGNITION_UNITS[@]} )); then
+  ok "Ignition${IGNITION_VER:+ $IGNITION_VER} found: ${IGNITION_DIRS[*]:-no directory} ${IGNITION_UNITS[*]:+/ ${IGNITION_UNITS[*]}}"
+else
+  skip "no Ignition install found"
+fi
+
 DROPINS=(/etc/systemd/system/docker.service.d/10-data-root.conf
          /etc/systemd/system/containerd.service.d/10-data-root.conf)
 CONFIGS=(/etc/docker/daemon.json /etc/docker/daemon.json.bak
@@ -195,6 +250,17 @@ else
     printf '   DELETE TREE: %-34s (%s)\n' "$d" "$(du -sh "$d" 2>/dev/null | cut -f1 || echo '?')"
   done
 fi
+if (( KEEP_IGNITION )); then
+  skip "Ignition (--keep-ignition)"
+elif (( ${#IGNITION_DIRS[@]} || ${#IGNITION_UNITS[@]} )); then
+  for u in "${IGNITION_UNITS[@]+"${IGNITION_UNITS[@]}"}"; do echo "   remove service: $u"; done
+  for d in "${IGNITION_DIRS[@]+"${IGNITION_DIRS[@]}"}"; do
+    printf '   DELETE TREE: %-34s (%s)\n' "$d" "$(du -sh "$d" 2>/dev/null | cut -f1 || echo '?')"
+    if (( IGNITION_BACKUP )) && [[ -d "$d/data" ]]; then
+      echo "     archiving $d/data first -> /var/log/sitesync-airgap/"
+    fi
+  done
+fi
 for u in "${UNSURE[@]+"${UNSURE[@]}"}"; do warn "$u"; done
 if (( KEEP_GROUP )); then
   skip "docker group (--keep-group)"
@@ -211,6 +277,14 @@ if (( ! YES )); then
   echo
   echo "   This destroys ALL containers, images and named volumes on this machine,"
   echo "   including the ChirpStack database. There is no undo."
+  if (( ! KEEP_IGNITION )) && (( ${#IGNITION_DIRS[@]} || ${#IGNITION_UNITS[@]} )); then
+    echo
+    echo "   It also removes the Ignition gateway${IGNITION_VER:+ ($IGNITION_VER)} and its projects,"
+    echo "   tag history and internal database."
+    (( IGNITION_BACKUP )) \
+      && echo "   A copy of the gateway's data/ is archived to /var/log/sitesync-airgap first." \
+      || echo "   NO backup will be taken (--no-ignition-backup)."
+  fi
   read -r -p "   Type 'wipe' to continue: " answer
   [[ "$answer" == wipe ]] || { echo "   aborted."; exit 1; }
 fi
@@ -238,6 +312,105 @@ if command -v loginctl >/dev/null 2>&1; then
       warn "    sudo -u $user XDG_RUNTIME_DIR=/run/user/$uid dockerd-rootless-setuptool.sh uninstall"
     fi
   done < <(loginctl list-users --no-legend 2>/dev/null || true)
+fi
+
+# ------------------------------------------------------------- ignition ------
+# Ignition is not a package and not a container, so nothing else in this script
+# would touch it. Removal is: stop it, archive the one irreplaceable thing,
+# let the vendor's own uninstaller run, then clean up what it leaves.
+if (( ! KEEP_IGNITION )) && (( ${#IGNITION_DIRS[@]} || ${#IGNITION_UNITS[@]} )); then
+  say "Removing the Ignition gateway"
+
+  for u in "${IGNITION_UNITS[@]+"${IGNITION_UNITS[@]}"}"; do
+    run "systemctl disable --now '$u' >/dev/null 2>&1 || true"
+    ok "stopped and disabled $u"
+  done
+
+  for d in "${IGNITION_DIRS[@]+"${IGNITION_DIRS[@]}"}"; do
+    [[ -d "$d" ]] || continue
+
+    # Stop it the vendor's way too. A gateway still running holds its own
+    # files open, and the uninstaller below will do a worse job around it.
+    if [[ -x "$d/ignition.sh" ]]; then
+      run "'$d/ignition.sh' stop >/dev/null 2>&1 || true"
+    fi
+
+    # --- the backup ----------------------------------------------------------
+    # data/ holds the projects, the internal DB and the gateway config. It is
+    # the only part of a gateway that is not reproducible from the artifact,
+    # so it goes somewhere durable BEFORE anything destructive runs -- and
+    # into the log directory this script already refuses to delete.
+    if (( IGNITION_BACKUP )) && [[ -d "$d/data" ]]; then
+      mkdir -p /var/log/sitesync-airgap
+      BK="/var/log/sitesync-airgap/ignition-data-$(date -u +%Y%m%d-%H%M%S).tar.gz"
+      if (( DRY )); then
+        printf '   [dry ] tar czf %s -C %s data\n' "$BK" "$d"
+      elif tar czf "$BK" -C "$d" data 2>/dev/null; then
+        ok "archived the gateway data to $BK ($(du -h "$BK" | cut -f1))"
+      else
+        # A failed backup must not silently become a deletion.
+        rm -f "$BK"
+        fail "could not archive $d/data, so nothing was removed.
+        Fix the cause, or accept the loss explicitly with --no-ignition-backup."
+      fi
+    fi
+
+    # --- the vendor uninstaller ---------------------------------------------
+    # Run it when it exists: it knows about the service registration and the
+    # bits it scattered outside its own directory. It is not trusted to
+    # finish the job -- the rm below is what guarantees that -- but skipping
+    # it leaves registrations behind that a directory delete cannot reach.
+    if [[ -x "$d/uninstall" ]]; then
+      run "'$d/uninstall' -- 'unattended=none' >/dev/null 2>&1 || true"
+      ok "ran the Ignition uninstaller in $d"
+    fi
+
+    if [[ -d "$d" ]]; then
+      case "$d" in
+        /|/usr|/usr/local|/usr/local/bin|/etc|/var|/opt|/home|/root)
+          warn "refusing to delete '$d': that is a system directory, not a gateway" ;;
+        *)
+          run "rm -rf --one-file-system -- '$d'"
+          ok "removed $d" ;;
+      esac
+    fi
+  done
+
+  # Unit files the uninstaller may have left, plus the SysV script the
+  # installer writes on non-systemd boxes.
+  for u in "${IGNITION_UNITS[@]+"${IGNITION_UNITS[@]}"}"; do
+    for f in "/etc/systemd/system/$u" "/lib/systemd/system/$u" "/usr/lib/systemd/system/$u"; do
+      [[ -e "$f" ]] || continue
+      run "rm -f '$f'"; ok "removed $f"
+    done
+  done
+  for f in /etc/init.d/ignition /etc/init.d/Ignition-Gateway; do
+    [[ -e "$f" ]] || continue
+    run "rm -f '$f'"; ok "removed $f"
+  done
+  run "systemctl daemon-reload >/dev/null 2>&1 || true"
+  run "systemctl reset-failed >/dev/null 2>&1 || true"
+
+  # The installer creates a service account when 'user=' names one that does
+  # not exist. Remove it only if it owns nothing else -- a login account that
+  # happens to run the gateway is the operator's, not ours to delete.
+  if getent passwd ignition >/dev/null; then
+    home="$(getent passwd ignition | cut -d: -f6)"
+    if [[ "$home" == /usr/local/bin/ignition || "$home" == /opt/ignition \
+       || "$home" == /usr/local/ignition || "$home" == /nonexistent || -z "$home" ]]; then
+      run "userdel ignition >/dev/null 2>&1 || true"
+      getent passwd ignition >/dev/null && warn "user 'ignition' could not be removed" \
+                                        || ok "removed the 'ignition' service account"
+    else
+      warn "leaving user 'ignition' alone: its home is $home, which this script did not create"
+    fi
+  fi
+  getent group ignition >/dev/null && { run "groupdel ignition >/dev/null 2>&1 || true"; }
+
+  run "rm -f '$IGNITION_INFO'"
+elif (( KEEP_IGNITION )); then
+  say "Keeping the Ignition gateway (--keep-ignition)"
+  warn "it is still installed and, if enabled, still running."
 fi
 
 # ------------------------------------------------------------- packages ------
@@ -380,6 +553,19 @@ done
 for f in "${DROPINS[@]}" "${CONFIGS[@]}"; do
   [[ -e "$f" ]] && { warn "$f still exists"; CLEAN=0; }
 done
+if (( ! KEEP_IGNITION )); then
+  for d in "${IGNITION_DIRS[@]+"${IGNITION_DIRS[@]}"}"; do
+    [[ -d "$d" ]] && { warn "$d still exists (Ignition)"; CLEAN=0; }
+  done
+  for u in "${IGNITION_UNITS[@]+"${IGNITION_UNITS[@]}"}"; do
+    systemctl list-unit-files "$u" 2>/dev/null | grep -q "$u" && { warn "$u still registered"; CLEAN=0; }
+  done
+  if command -v ss >/dev/null 2>&1 && ss -ltnH 'sport = :8088' 2>/dev/null | grep -q .; then
+    warn "something is still listening on port 8088 - a gateway may still be running"
+    CLEAN=0
+  fi
+  (( ${#IGNITION_DIRS[@]} || ${#IGNITION_UNITS[@]} )) && (( CLEAN )) && ok "Ignition gone"
+fi
 (( CLEAN )) && ok "no leftovers found"
 
 say "Done."

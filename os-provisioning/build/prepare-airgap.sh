@@ -21,6 +21,7 @@ set -Eeuo pipefail
 SELF_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DOCKER_SH="${DOCKER_BUNDLE_SH:-$SELF_DIR/docker-offline-bundle.sh}"
 CHIRP_SH="${CHIRPSTACK_BUNDLE_SH:-$SELF_DIR/chirpstack-image-bundle.sh}"
+IGNITION_SH="${IGNITION_BUNDLE_SH:-$SELF_DIR/ignition-bundle.sh}"
 
 # ---------------------------------------------------------------- defaults ---
 CODENAME="noble"
@@ -37,6 +38,10 @@ STACK_DIR=""
 SKIP_STACK=0
 LATEST=0
 IMAGES_ONLY=0
+SKIP_IGNITION=0
+IGNITION_VERSION=""
+IGNITION_RUN=""
+IGNITION_CACHE=""
 DOCKER_ARGS=()
 IMAGE_ARGS=()
 
@@ -48,6 +53,17 @@ Usage: prepare-airgap.sh [options]
   -a, --arch ARCH       Target arch (default: amd64)
       --skip-docker     Don't build the Docker Engine bundle
       --skip-images     Don't build the ChirpStack image bundle
+      --skip-ignition   Don't include the bare-metal Ignition gateway
+      --ignition-version VER
+                        Pin Ignition to an exact release, e.g. 8.1.53. Without
+                        this the newest STABLE 8.1 is downloaded and stamped
+                        into the artifact.
+      --ignition-run FILE
+                        Use a .run already on disk instead of downloading. For
+                        a build host with no internet.
+      --ignition-cache DIR
+                        Where to keep downloaded Ignition installers between
+                        builds (default: ~/.cache/sitesync-ignition)
       --skip-stack      Don't include the ChirpStack stack itself (compose file,
                         configuration/, sitesync). Only do this if the target
                         already has them -- without the stack the images have
@@ -88,10 +104,17 @@ while [[ $# -gt 0 ]]; do
     -a|--arch)      ARCH="$2"; shift 2 ;;
     --skip-docker)  SKIP_DOCKER=1; shift ;;
     --skip-images)  SKIP_IMAGES=1; shift ;;
+    --skip-ignition) SKIP_IGNITION=1; shift ;;
+    --ignition-version) IGNITION_VERSION="$2"; shift 2 ;;
+    --ignition-run)     IGNITION_RUN="$2"; shift 2 ;;
+    --ignition-cache)   IGNITION_CACHE="$2"; shift 2 ;;
     --skip-stack)   SKIP_STACK=1; shift ;;
     --stack-dir)    STACK_DIR="$2"; shift 2 ;;
     --compose)      COMPOSE_FILE="$2"; shift 2 ;;
-    --images-only)  IMAGES_ONLY=1; LATEST=1; SKIP_DOCKER=1; shift ;;
+    # An image update is about containers. Re-shipping a 1.5 GB Ignition
+    # installer to a site that already has a gateway would be a two-gigabyte
+    # no-op, so update mode never carries one.
+    --images-only)  IMAGES_ONLY=1; LATEST=1; SKIP_DOCKER=1; SKIP_IGNITION=1; shift ;;
     --latest)       LATEST=1; shift ;;
     --from-survey)  SURVEY="$2"; shift 2 ;;
     --from-list)    FROM_LIST="$2"; shift 2 ;;
@@ -113,7 +136,10 @@ OUTDIR="${OUTDIR:-$PWD/artifacts}"
 if (( IMAGES_ONLY && SKIP_IMAGES )); then
   die "--images-only and --skip-images are contradictory: drop one"
 fi
-(( SKIP_DOCKER && SKIP_IMAGES )) && die "nothing to do (both --skip-docker and --skip-images)"
+(( SKIP_DOCKER && SKIP_IMAGES && SKIP_IGNITION )) && die "nothing to do (everything is skipped)"
+if (( SKIP_IGNITION )) && [[ -n "$IGNITION_VERSION$IGNITION_RUN" ]]; then
+  die "--skip-ignition contradicts --ignition-version/--ignition-run: drop one"
+fi
 if (( LATEST )) && [[ -n "$FROM_LIST" ]]; then
   die "--latest and --from-list are opposites: one takes whatever is current, the other reproduces a past build. Pick one."
 fi
@@ -147,6 +173,10 @@ fi
 # Fail before doing any work, not halfway through a 200 MB download.
 (( SKIP_DOCKER )) || [[ -x "$DOCKER_SH" || -f "$DOCKER_SH" ]] || die "not found: $DOCKER_SH"
 (( SKIP_IMAGES )) || [[ -x "$CHIRP_SH" || -f "$CHIRP_SH" ]] || die "not found: $CHIRP_SH"
+(( SKIP_IGNITION )) || [[ -x "$IGNITION_SH" || -f "$IGNITION_SH" ]] || die "not found: $IGNITION_SH"
+if (( ! SKIP_IGNITION )) && [[ -n "$IGNITION_RUN" && ! -f "$IGNITION_RUN" ]]; then
+  die "--ignition-run file not found: $IGNITION_RUN"
+fi
 if (( ! SKIP_IMAGES )); then
   command -v docker >/dev/null || die "the image bundle needs a working docker on THIS host (or use --skip-images)"
   docker info >/dev/null 2>&1  || die "docker daemon not reachable on THIS host (or use --skip-images)"
@@ -258,6 +288,31 @@ $leaked"
   echo "    snapshot: $(du -h "$OUTER/$STACK_TARBALL" | cut -f1)${STACK_COMMIT:+  (commit $STACK_COMMIT)}"
 fi
 
+# ----------------------------------------------------------- 4. ignition ----
+# Ignition runs on the metal, not in a container, so it is a third payload
+# rather than another image: the vendor's .run plus the script that drives it
+# unattended. ignition-bundle.sh owns everything about how it is fetched and
+# verified; this is only the hand-off.
+IGNITION_TARBALL=""
+IGNITION_VERSION_RESOLVED=""
+if (( ! SKIP_IGNITION )); then
+  log "4/4  Ignition gateway (bare metal)"
+  ig_args=(--out "$OUTER")
+  [[ -n "$IGNITION_VERSION" ]] && ig_args+=(--version "$IGNITION_VERSION")
+  [[ -n "$IGNITION_RUN"     ]] && ig_args+=(--installer "$IGNITION_RUN")
+  [[ -n "$IGNITION_CACHE"   ]] && ig_args+=(--cache "$IGNITION_CACHE")
+  bash "$IGNITION_SH" "${ig_args[@]}" \
+    || die "the Ignition bundle failed (see above).
+       To build without it:            --skip-ignition
+       To use a hand-downloaded file:  --ignition-run ./ignition-8.1.x-linux-64-installer.run"
+  shopt -s nullglob
+  found=("$OUTER"/ignition-*-linux-64.tar.gz)
+  (( ${#found[@]} == 1 )) || die "expected exactly one Ignition tarball, got ${#found[@]}"
+  IGNITION_TARBALL="$(basename "${found[0]}")"
+  IGNITION_VERSION_RESOLVED="$(sed -nE 's/^ignition-([0-9.]+)-linux-64\.tar\.gz$/\1/p' <<<"$IGNITION_TARBALL")"
+  echo "    Ignition ${IGNITION_VERSION_RESOLVED:-unknown}: $(du -h "${found[0]}" | cut -f1)"
+fi
+
 # ------------------------------------------------- resolve versions ---------
 # The floating tags (:4, :14-alpine, :2) already give current content, so
 # "latest" needs no registry query. What is missing is a human-readable record
@@ -333,6 +388,8 @@ AIRGAP_DOCKER_TARBALL="${DOCKER_TARBALL}"
 AIRGAP_IMAGE_TARBALL="${IMAGE_TARBALL}"
 AIRGAP_STACK_TARBALL="${STACK_TARBALL}"
 AIRGAP_STACK_COMMIT="${STACK_COMMIT}"
+AIRGAP_IGNITION_TARBALL="${IGNITION_TARBALL}"
+AIRGAP_IGNITION_VERSION="${IGNITION_VERSION_RESOLVED}"
 EOF
 
 if [[ "$MODE" == update ]]; then
@@ -375,6 +432,7 @@ Contents:
 $( [[ -n "$DOCKER_TARBALL" ]] && echo "  ${DOCKER_TARBALL}   Docker Engine, offline apt repo" )
 $( [[ -n "$IMAGE_TARBALL"  ]] && echo "  ${IMAGE_TARBALL}   ChirpStack container images" )
 $( [[ -n "$STACK_TARBALL"  ]] && echo "  ${STACK_TARBALL}                         the ChirpStack stack itself${STACK_COMMIT:+ (commit ${STACK_COMMIT})}" )
+$( [[ -n "$IGNITION_TARBALL" ]] && echo "  ${IGNITION_TARBALL}   Ignition ${IGNITION_VERSION_RESOLVED}, installed on the metal" )
 $( [[ -n "$VERSIONS_TXT"   ]] && echo "  VERSIONS.txt                          what version of each image is inside" )
 
 INSTRUCTIONS
@@ -397,6 +455,7 @@ No internet connection is needed on the server.
 WHAT IT DOES, IN ORDER
   00  checks this machine before changing anything
   10  installs Docker Engine from the offline package repo
+$( [[ -n "$IGNITION_TARBALL" ]] && echo "  15  installs Ignition ${IGNITION_VERSION_RESOLVED} on the metal and starts the gateway" )
   20  loads the container images
   30  installs the stack to /opt/sitesync-chirpstack
   40  asks the site questions and writes the settings
@@ -407,14 +466,26 @@ That log is the one thing to send if you need help.
 EOF
 fi
 
-if [[ -n "$VERSIONS_TXT" ]]; then
+if [[ -n "$VERSIONS_TXT" || -n "$IGNITION_VERSION_RESOLVED" ]]; then
   {
-    printf 'Resolved image versions -- %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'Resolved versions -- %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'Exact digests are in the image bundle: images.txt / images.pinned\n\n'
-    printf '%-42s %s\n' "IMAGE" "VERSION"
-    printf '%s' "$VERSIONS_TXT" | while IFS=$'\t' read -r t v; do
-      [[ -n "${t:-}" ]] && printf '%-42s %s\n' "$t" "$v"
-    done
+    if [[ -n "$VERSIONS_TXT" ]]; then
+      printf '%-42s %s\n' "IMAGE" "VERSION"
+      printf '%s' "$VERSIONS_TXT" | while IFS=$'\t' read -r t v; do
+        [[ -n "${t:-}" ]] && printf '%-42s %s\n' "$t" "$v"
+      done
+      printf '\n'
+    fi
+    if [[ -n "$IGNITION_VERSION_RESOLVED" ]]; then
+      printf '%-42s %s\n' "BARE METAL" "VERSION"
+      printf '%-42s %s\n' "ignition (gateway)" "$IGNITION_VERSION_RESOLVED"
+      # The vendor's own checksum, carried out of the inner bundle so the
+      # record of what shipped does not depend on unpacking it again.
+      _igsha="$(tar -xzOf "$OUTER/$IGNITION_TARBALL" --wildcards '*/IGNITION_INFO' 2>/dev/null \
+                 | sed -n 's/^IGNITION_SHA256="\(.*\)"$/\1/p' | head -1)"
+      [[ -n "$_igsha" ]] && printf '%-42s %s\n' "  installer sha256" "$_igsha"
+    fi
   } > "$OUTER/VERSIONS.txt"
 fi
 
@@ -452,9 +523,10 @@ REC
   fi
   [[ -f "$OUTER/VERSIONS.txt" ]] && cp "$OUTER/VERSIONS.txt" "$RECORDSDIR/${NAME}.versions"
 
-  printf '%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$NAME" "$MODE" \
     "chirpstack=${CS_VERSION:-n/a}" "engine=${DOCKER_TARBALL:-none}" \
+    "ignition=${IGNITION_VERSION_RESOLVED:-none}" \
     >> "$RECORDSDIR/builds.log"
 fi
 
@@ -475,6 +547,7 @@ Artifact ready.
   engine   : ${DOCKER_TARBALL:-(not included)}
   images   : ${IMAGE_TARBALL:-(skipped)}
   stack    : ${STACK_TARBALL:-(not included)}${STACK_COMMIT:+  commit ${STACK_COMMIT}}
+  ignition : ${IGNITION_TARBALL:-(not included)}
 $( [[ -n "$CS_VERSION" ]] && printf '  chirpstack: %s\n' "$CS_VERSION" )
 
 Hand off with:

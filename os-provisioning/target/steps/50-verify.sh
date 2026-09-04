@@ -10,6 +10,33 @@ if (( ! SUMMARY_ONLY )); then
   banner "Step 50: checking the result"
 fi
 
+# --- Ignition ----------------------------------------------------------------
+# Reported before the ChirpStack summary and independently of it: the gateway
+# is a separate product on the same box, and it is installed even when the
+# ChirpStack side of the install was skipped or is not configured yet.
+if [[ -f /var/lib/sitesync-airgap/ignition.info ]]; then
+  # shellcheck disable=SC1091
+  . /var/lib/sitesync-airgap/ignition.info
+  IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  state="not responding"
+  if command -v ss >/dev/null 2>&1 && ss -ltnH 'sport = :8088' 2>/dev/null | grep -q .; then
+    state="running"
+  fi
+  cat <<TXT
+
+   Ignition ${IGNITION_VERSION:-} -- ${state}
+       http://${IP:-<this machine>}:8088
+       installed at ${IGNITION_LOCATION:-unknown}
+$( [[ -n "${IGNITION_SERVICE_UNIT:-}" ]] \
+     && printf '       service: %s\n' "$IGNITION_SERVICE_UNIT" \
+     || printf '       NO systemd service - it will not start after a reboot\n' )
+
+   The first visit to that address runs the commissioning wizard, where you
+   set the admin password. Until that is done, anyone on the network can.
+
+TXT
+fi
+
 if [[ ! -f "$DEST/.env" ]]; then
   cat <<TXT
 

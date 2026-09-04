@@ -16,6 +16,8 @@
 #     --resume            carry on from the step that failed last time
 #     --redo NN           re-run one step by number, e.g. --redo 20
 #     --install-dir DIR   where the stack lives (default /opt/sitesync-chirpstack)
+#     --ignition-dir DIR  where Ignition goes. Without this, step 15 asks, and
+#                         defaults to the installer's own /usr/local/bin/ignition
 #
 # Container log rotation is applied by default (10m x 3 per container).
 # Override with --log-max-size / --log-max-file, or skip with --no-log-config.
@@ -32,6 +34,7 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/sitesync-chirpstack}"
 SKIP_CONFIGURE=0
 RESUME=0
 REDO=""
+IGNITION_DIR="${IGNITION_DIR:-}"
 PASSTHRU=()
 
 while [[ $# -gt 0 ]]; do
@@ -45,7 +48,8 @@ while [[ $# -gt 0 ]]; do
     --resume)        RESUME=1; shift ;;
     --redo)          REDO="${2:-}"; shift 2 ;;
     --install-dir)   INSTALL_DIR="${2:-}"; shift 2 ;;
-    -h|--help)       sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --ignition-dir)  IGNITION_DIR="${2:-}"; shift 2 ;;
+    -h|--help)       sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -70,6 +74,9 @@ export AIRGAP_CODENAME AIRGAP_ARCH AIRGAP_MODE
 export AIRGAP_DOCKER_TARBALL="${AIRGAP_DOCKER_TARBALL:-}"
 export AIRGAP_IMAGE_TARBALL="${AIRGAP_IMAGE_TARBALL:-}"
 export AIRGAP_STACK_TARBALL="${AIRGAP_STACK_TARBALL:-}"
+export AIRGAP_IGNITION_TARBALL="${AIRGAP_IGNITION_TARBALL:-}"
+export AIRGAP_IGNITION_VERSION="${AIRGAP_IGNITION_VERSION:-}"
+export AIRGAP_IGNITION_DIR="$IGNITION_DIR"
 
 banner "Verifying transfer integrity"
 sha256sum -c --quiet SHA256SUMS || fail "checksum mismatch - re-copy the whole folder"
