@@ -1,4 +1,4 @@
-# This file contains an example US915 example (channels 0-7 + 64).
+# US915 16-channel region: sub-bands 0 and 1 combined (channels 0-15 + 64, 65).
 [[regions]]
 
   # ID is an use-defined identifier for this region.
@@ -35,7 +35,7 @@
         # The topic prefix can be used to define the region of the gateway.
         # Note, there is no need to add a trailing '/' to the prefix. The trailing
         # '/' is automatically added to the prefix if it is configured.
-        topic_prefix="us915_0"
+        topic_prefix="us915_01"
 
         # MQTT server (e.g. scheme://host:port where scheme is tcp, ssl or ws)
         server="$MQTT_BROKER_URL"
@@ -202,6 +202,7 @@
       bandwidth=500000
       modulation="LORA"
       spreading_factors=[8]
+
 
   # Region specific network configuration.
   [regions.network]

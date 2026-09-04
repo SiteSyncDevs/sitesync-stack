@@ -28,6 +28,9 @@
 #   - the docker group and the group membership install.sh granted
 #   - the apt key and repo definition, if enable-online-updates.sh ever ran
 #   - scratch files install.sh leaves behind when it fails mid-run
+#   - /opt/sitesync-chirpstack and its .replaced-* copies (the stack, the site
+#     settings, certificates and MQTT users), plus /var/lib/sitesync-airgap
+#     (the install step markers that drive --resume)
 
 set -Eeuo pipefail
 
@@ -38,6 +41,7 @@ KEEP_PACKAGES=0
 KEEP_DATA=0
 KEEP_GROUP=0
 EXTRA_ROOTS=()
+STACK_DIR_TARGET="${STACK_DIR_TARGET:-/opt/sitesync-chirpstack}"
 
 usage() { sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'; cat <<'EOF'
 
@@ -274,6 +278,38 @@ while IFS= read -r leftover; do
   [[ -n "$leftover" ]] || continue
   run "rm -rf '$leftover'"; ok "removed stale installer scratch: $leftover"
 done < <(find / -xdev -maxdepth 6 \( -name .aptsource.list -o -name .aptlists \) 2>/dev/null || true)
+
+# ------------------------------------------------------- sitesync stack ------
+# install-all.sh writes these; without removing them a "clean" reinstall is not
+# clean. The state markers matter most: they make --resume skip steps that were
+# never actually run on this machine.
+if (( ! KEEP_DATA )); then
+  say "Removing the SiteSync stack and its install state"
+
+  if [[ -d /var/lib/sitesync-airgap ]]; then
+    run "rm -rf --one-file-system -- /var/lib/sitesync-airgap"
+    ok "removed /var/lib/sitesync-airgap (install step markers)"
+  fi
+
+  if [[ -d "$STACK_DIR_TARGET" ]]; then
+    # This holds the site's .env, certificates and MQTT users. Keeping it would
+    # make the next install silently reuse the old settings and skip setup.sh.
+    run "rm -rf --one-file-system -- '$STACK_DIR_TARGET'"
+    ok "removed $STACK_DIR_TARGET (settings, certificates, MQTT users)"
+  fi
+
+  # The previous-version copies step 30 leaves behind.
+  while IFS= read -r old; do
+    [[ -n "$old" ]] || continue
+    run "rm -rf --one-file-system -- '$old'"; ok "removed $old"
+  done < <(find "$(dirname "$STACK_DIR_TARGET")" -maxdepth 1 -name "$(basename "$STACK_DIR_TARGET").replaced-*" 2>/dev/null || true)
+else
+  if [[ -d "$STACK_DIR_TARGET" || -d /var/lib/sitesync-airgap ]]; then
+    say "Keeping the SiteSync stack (--keep-data)"
+    warn "$STACK_DIR_TARGET and /var/lib/sitesync-airgap are left in place."
+    warn "A later install will reuse that .env and will NOT ask the setup questions."
+  fi
+fi
 
 # ----------------------------------------------------------------- data ------
 if (( ! KEEP_DATA )); then
