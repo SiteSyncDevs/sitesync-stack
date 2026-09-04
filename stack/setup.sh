@@ -44,6 +44,24 @@ yesno() {  # yesno <prompt> <default y|n>
   [[ "${reply,,}" == y* ]]
 }
 
+# setup.sh is normally run through sudo, so everything it creates -- .env above
+# all -- comes out owned by root and mode 600, and the person who ran it then
+# cannot read their own configuration ("./sitesync: ./.env: Permission denied").
+# Hand it all back at the end.
+hand_back_ownership() {
+  local u="${SUDO_USER:-}" g
+  [[ -n "$u" && "$u" != root ]] || return 0
+  id "$u" >/dev/null 2>&1 || return 0
+  g="$(id -gn "$u" 2>/dev/null)" || return 0
+  # The MQTT password file is the one exception: it must stay owned by uid 1883,
+  # the user the broker drops to, or mosquitto cannot read it and restarts
+  # forever. Everything else belongs to the operator.
+  find . -path ./configuration/mosquitto/config/passwd -prune -o -print0 2>/dev/null \
+    | xargs -0 --no-run-if-empty chown "$u":"$g" 2>/dev/null || true
+  [[ -f .env ]] && chmod 600 .env 2>/dev/null
+  return 0
+}
+
 randstr() {  # random password; avoids SIGPIPE under `set -o pipefail`
   local s=""
   while (( ${#s} < ${1:-40} )); do
@@ -255,6 +273,7 @@ if [[ "${SITESYNC_AIRGAP:-0}" == 1 ]]; then
 fi
 
 chmod 600 .env 2>/dev/null || true
+hand_back_ownership
 
 # -----------------------------------------------------------------------------
 b "Setup complete."
@@ -264,6 +283,14 @@ bash scripts/doctor.sh || true
 p ""
 if yesno "Start the site now" y; then
   ./sitesync start
+  # Starting generates more files (broker config, certificates) as root.
+  hand_back_ownership
 else
   p "When you are ready:  ./sitesync start"
+fi
+
+if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]]; then
+  p ""
+  p "These files now belong to ${SUDO_USER}, so ./sitesync works without sudo"
+  p "once you have logged out and back in to pick up the docker group."
 fi

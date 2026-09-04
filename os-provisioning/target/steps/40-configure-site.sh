@@ -31,3 +31,13 @@ cd "$DEST"
 export SITESYNC_AIRGAP=1
 bash setup.sh < /dev/tty || fail "setup did not complete. You can run it again at any time:
             cd $DEST && sudo bash setup.sh"
+
+# setup.sh hands ownership back itself; re-assert it here so a partial or
+# interrupted run still leaves files the operator can read.
+OWNER="${SUDO_USER:-root}"
+if [[ "$OWNER" != root ]] && id "$OWNER" >/dev/null 2>&1; then
+  find "$DEST" -path "$DEST/configuration/mosquitto/config/passwd" -prune -o -print0 2>/dev/null \
+    | xargs -0 --no-run-if-empty chown "$OWNER":"$(id -gn "$OWNER")" 2>/dev/null || true
+  [[ -f "$DEST/.env" ]] && chmod 600 "$DEST/.env"
+  ok "configuration belongs to $OWNER"
+fi
