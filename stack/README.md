@@ -121,6 +121,22 @@ what it does and what the valid values are. Change what you need, save, then:
 `apply` checks your settings **before** it changes anything, so a typo gets a
 plain-English explanation rather than a broken site.
 
+It also reloads the services that read their configuration from a file on disk
+— the web server and the MQTT broker. This is not optional housekeeping: Docker
+only recreates a container when its *definition* changes, so editing a mounted
+config file otherwise has no effect at all and the site keeps running the
+settings it started with.
+
+The web server's configuration is **validated before anything is touched**. If
+it is not valid, nothing changes and the error is printed — a bad edit cannot
+take the site down. If it is valid, the web server is restarted, which costs
+about a second on the web interface and touches no other service. (A restart
+rather than a live reload, because `caddy reload` needs the admin API and this
+stack switches that off.)
+
+Hand-editing files under `configuration/chirpstack/` is the exception — those
+are read once at startup, so run `./sitesync restart` after changing them.
+
 If you are ever unsure what state things are in:
 
 ```bash

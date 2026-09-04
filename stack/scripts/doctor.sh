@@ -65,6 +65,11 @@ case "${TLS_MODE:-}" in
     ;;
   self-signed)
     ok "TLS_MODE=self-signed. Browsers will warn once; that is expected."
+    if [[ "$DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      note "SITE_DOMAIN is an IP address. That works, but a DNS name is better:"
+      out+="            an IP cannot get a publicly trusted certificate, so you are stuck"$'\n'
+      out+="            with self-signed, and the certificate breaks if the address changes."$'\n'
+    fi
     if [[ "$DOMAIN" == "localhost" && "${BIND_ADDRESS:-0.0.0.0}" == "0.0.0.0" ]]; then
       _ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
       note "SITE_DOMAIN is 'localhost', so ONLY this machine can open the web interface."
@@ -103,6 +108,39 @@ case "${TLS_MODE:-}" in
     bad "TLS_MODE is '${TLS_MODE:-empty}'. It must be one of: off, self-signed, letsencrypt, custom."
     ;;
 esac
+
+# --- can a browser actually complete a TLS handshake? -----------------------
+# Everything above checks configuration. This checks the thing the user sees.
+# A certificate can exist, be valid, and still be unservable: browsers send no
+# SNI for a bare IP address, and without default_sni Caddy then matches no site
+# and aborts the handshake. That failure is invisible to every other check here.
+if [[ "${TLS_MODE:-}" != "off" ]] && command -v openssl >/dev/null 2>&1 \
+   && command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  _hp="${HTTPS_PORT:-443}"
+  if timeout 5 bash -c "exec 3<>/dev/tcp/127.0.0.1/$_hp" 2>/dev/null; then
+    _named=0 _bare=0
+    timeout 8 openssl s_client -connect "127.0.0.1:$_hp" -servername "$DOMAIN" \
+      </dev/null 2>/dev/null | grep -q 'BEGIN CERTIFICATE\|Certificate chain' && _named=1
+    timeout 8 openssl s_client -connect "127.0.0.1:$_hp" \
+      </dev/null 2>/dev/null | grep -q 'BEGIN CERTIFICATE\|Certificate chain' && _bare=1
+
+    if (( _named && _bare )); then
+      ok "the web server completes a TLS handshake the way a browser does."
+    elif (( _named && ! _bare )); then
+      bad "the certificate works only when the client sends a server name, and
+            browsers do NOT send one for a bare IP address. Every browser will
+            show an SSL protocol error.
+        Fix: configuration/caddy/Caddyfile needs this in its global block:
+                default_sni {\$SITE_DOMAIN}
+        then run ./sitesync apply"
+    elif (( ! _named && ! _bare )); then
+      bad "the web server is listening on port $_hp but will not complete a TLS
+            handshake at all. See what it says:  ./sitesync logs caddy"
+    fi
+  else
+    note "nothing is listening on port $_hp yet, so TLS was not tested. Start the site first."
+  fi
+fi
 
 # --- MQTT -------------------------------------------------------------------
 if [[ "${MQTT_AUTH_ENABLED:-true}" == "true" ]]; then

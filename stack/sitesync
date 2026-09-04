@@ -87,10 +87,51 @@ cmd_render() {
   bash scripts/render.sh
 }
 
+# Services that read their configuration from a bind-mounted file will NOT be
+# recreated by "compose up -d" when only that file changed -- compose compares
+# the service definition, not the contents of mounted files. Without this, an
+# edit to the Caddyfile or a regenerated MQTT password file simply never takes
+# effect, and the site keeps running the configuration it started with.
+reload_mounted_config() {
+  local running
+  running="$("${DC[@]}" ps --services --status running 2>/dev/null || true)"
+
+  if grep -qx caddy <<<"$running"; then
+    local err
+    # Check the configuration BEFORE touching the running server. This needs no
+    # admin API, so it works with "admin off" -- which is set deliberately, and
+    # is also why "caddy reload" cannot be used here: reload posts to the admin
+    # API on :2019 and that endpoint is switched off.
+    if ! err="$("${DC[@]}" exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1)"; then
+      bad "the web server configuration is not valid, so nothing was changed:"
+      printf '%s\n' "$err" | grep -vE '"level":"(info|warn)"' | sed 's/^/        /'
+      info "        The site is still up on the previous settings."
+      info "        Fix configuration/caddy/ and re-run ./sitesync apply"
+      return 1
+    fi
+    # Known-good, so a restart is safe. It costs about a second of downtime on
+    # the web interface and nothing else; no other service is touched.
+    if "${DC[@]}" restart caddy >/dev/null 2>&1; then
+      ok "web server restarted with the new configuration"
+    else
+      bad "the web server would not restart. See why with:  ./sitesync logs caddy"
+      return 1
+    fi
+  fi
+
+  if grep -qx mosquitto <<<"$running"; then
+    "${DC[@]}" kill -s HUP mosquitto >/dev/null 2>&1 \
+      && ok "MQTT broker reloaded its users and permissions" \
+      || warn "could not signal the MQTT broker; run ./sitesync restart if MQTT settings changed"
+  fi
+}
+
 cmd_start() {
   require_docker; require_env; cmd_render
   bold "Starting ${SITE_LABEL:-this site}..."
   "${DC[@]}" up -d
+  # Harmless on a cold start; essential when the containers were already up.
+  reload_mounted_config || true
   echo
   cmd_status
 }
@@ -113,6 +154,7 @@ cmd_apply() {
   bold "Applying changes..."
   # --remove-orphans cleans up services you switched off in COMPOSE_PROFILES.
   "${DC[@]}" up -d --remove-orphans
+  reload_mounted_config || true
   echo
   cmd_status
 }
