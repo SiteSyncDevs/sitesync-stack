@@ -13,6 +13,10 @@
 # volume on the machine, including the ChirpStack postgres and redis data.
 # It is not a maintenance script and has no business on a customer VM.
 #
+# NOT removed, on purpose: /var/log/sitesync-airgap (the install logs -- the
+# record of what happened, and the first thing to ask for when something went
+# wrong). Delete it by hand if you want the machine truly pristine.
+#
 # It is deliberately standalone: it takes no arguments from the artifact and
 # reads no bundle metadata, so it still works when the artifact folder is gone
 # or the install died halfway through. Everything it removes is either
@@ -30,6 +34,7 @@
 #   - the docker group and the group membership install.sh granted
 #   - the apt key and repo definition, if enable-online-updates.sh ever ran
 #   - scratch files install.sh leaves behind when it fails mid-run
+#   - the sitesync-chirpstack-*.service boot unit, disabled and deleted
 #   - /opt/sitesync-chirpstack and its .replaced-* copies (the stack, the site
 #     settings, certificates and MQTT users), plus /var/lib/sitesync-airgap
 #     (the install step markers that drive --resume)

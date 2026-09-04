@@ -70,7 +70,8 @@ chmod +x "$DEST"/scripts/*.sh "$DEST"/os-provisioning/*.sh 2>/dev/null || true
 
 # Prove the snapshot is complete rather than discovering it at first start.
 for required in docker-compose.yml sitesync setup.sh .env.example \
-                configuration/chirpstack/chirpstack.toml \
+                scripts/lib-regions.sh \
+                configuration/chirpstack/chirpstack.toml.template \
                 configuration/mosquitto/config/mosquitto.conf \
                 configuration/postgresql/initdb; do
   [[ -e "$DEST/$required" ]] || fail "the stack snapshot is missing $required.

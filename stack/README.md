@@ -166,17 +166,50 @@ If you are ever unsure what state things are in:
 
 ## The settings that matter most
 
-### `REGION`
+### `RF_REGION` and `GATEWAY_BRIDGES`
 
-The single most important setting. It configures the network server, both
-gateway bridges, and the MQTT topic prefixes **together**, so they cannot drift
-out of sync — which is the classic way these deployments break.
+Two settings, matching the two questions an operator actually has: *what radio
+is this?* and *what do my gateways transmit on?*
 
+```bash
+RF_REGION=US915
+GATEWAY_BRIDGES="us915_0:1700 us915_12:1701"
 ```
-REGION=us915_0
+
+`RF_REGION` is the region on the gateway's datasheet — `US915`, `EU868`,
+`AU915`, `AS923`, `CN470`, and so on. Setting it enables **every** frequency
+plan for that region on the server. For US915 that is all sixteen: the eight
+8-channel sub-bands, the seven 16-channel pairs, and `us915_64ch`. Enabling a
+plan costs nothing until a gateway uses its topic prefix, and having them all
+on means a gateway can move between sub-bands without touching the server.
+Picking `AS923` enables all four AS923 plans.
+
+`GATEWAY_BRIDGES` is one entry per gateway connection, `sub-band:port`. Each
+entry becomes its own gateway bridge with its own UDP port and MQTT topic
+prefix, so a site can serve an 8-channel sub-band and a 16-channel one at the
+same time:
+
+```bash
+GATEWAY_BRIDGES="us915_0:1700 us915_12:1701 us915_64ch:1702"
 ```
 
-Valid values are the file names in `configuration/chirpstack/region_*.toml`.
+There is no limit on the number. `1700/udp` is the standard Semtech
+packet-forwarder port, so the first entry should normally use it.
+
+`doctor` checks that every sub-band belongs to `RF_REGION`, that no two bridges
+share a port, and that the generated `chirpstack.toml` actually matches
+`RF_REGION` — a mismatch there means gateways connect and uplinks silently go
+nowhere, which is the failure this design exists to prevent.
+
+**Two generated files** come out of this, both listed in `.gitignore`:
+`configuration/chirpstack/chirpstack.toml` (from `chirpstack.toml.template`,
+which is the file to edit for anything else ChirpStack-side) and
+`compose/gateways.yml` (the bridge services — Compose cannot loop, so they are
+generated, and `COMPOSE_FILE` in `.env` loads both files).
+
+**BasicStation is not currently wired up.** Configs exist only for the
+8-channel sub-bands, not the 16- or 64-channel plans, so offering it would
+produce containers that die on startup. UDP works for every plan.
 
 ### `TLS_MODE`
 

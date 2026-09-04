@@ -236,6 +236,8 @@ if (( ! SKIP_STACK )); then
     --exclude='./configuration/mosquitto/conf.d/*.conf' \
     --exclude='./configuration/mosquitto/config/passwd' \
     --exclude='./configuration/mosquitto/config/acl' \
+    --exclude='./configuration/chirpstack/chirpstack.toml' \
+    --exclude='./compose/gateways.yml' \
     .
 
   # Refuse to ship an artifact containing a secret, rather than trusting the

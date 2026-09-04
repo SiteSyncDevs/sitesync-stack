@@ -1,0 +1,1 @@
+# ./sitesync apply generates gateways.yml here from GATEWAY_BRIDGES in .env.

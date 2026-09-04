@@ -161,7 +161,7 @@ cmd_apply() {
 
 cmd_status() {
   require_docker; require_env
-  bold "${SITE_LABEL:-ChirpStack site}  (region ${REGION:-?})"
+  bold "${SITE_LABEL:-ChirpStack site}  (${RF_REGION:-?})"
   "${DC[@]}" ps --format 'table {{.Service}}\t{{.Status}}' || true
   echo
   info "Web interface:  $(site_url)"
@@ -174,13 +174,17 @@ cmd_status() {
     info "REST API:       $s://${SITE_DOMAIN:-localhost}:$p" ;;
   esac
   echo
-  info "Gateways connect to:"
-  case ",${COMPOSE_PROFILES:-}," in *,udp,*)
-    info "  UDP packet forwarder    ${SITE_DOMAIN:-this host} port ${UDP_PORT:-1700}/udp" ;;
-  esac
-  case ",${COMPOSE_PROFILES:-}," in *,basicstation,*)
-    info "  Basics Station          ${SITE_DOMAIN:-this host} port ${BASICSTATION_PORT:-3001}" ;;
-  esac
+  if [[ -n "${GATEWAY_BRIDGES:-}" ]]; then
+    info "Gateways connect to ${SITE_DOMAIN:-this host} on:"
+    local e sub port
+    for e in ${GATEWAY_BRIDGES}; do
+      sub="${e%%:*}"; port="${e##*:}"
+      info "  $(printf '%-11s' "$sub") UDP port $port"
+    done
+  else
+    info "No gateway bridges are configured, so no gateway can connect."
+    info "Set GATEWAY_BRIDGES in .env and run ./sitesync apply"
+  fi
 }
 
 cmd_logs() {
@@ -205,7 +209,7 @@ cmd_mqtt_info() {
   else
     info "  Login         not required"
   fi
-  info "  Topic prefix  ${REGION:-?}"
+  info "  Topic prefix  one per sub-band -- see GATEWAY_BRIDGES in .env"
   echo
   warn "This output contains a password. Do not paste it into a ticket or chat."
 }

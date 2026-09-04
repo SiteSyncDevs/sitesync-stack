@@ -9,6 +9,7 @@
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+. scripts/lib-regions.sh
 
 b() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 p() { printf '%s\n' "$*"; }
@@ -113,32 +114,80 @@ SITE_LABEL="$(ask 'Full name, for reports and backups' "$CUSTOMER")"
 set_var CUSTOMER "$CUSTOMER"
 set_var SITE_LABEL "\"$SITE_LABEL\""
 
-# --- 2. region ----------------------------------------------------------------
-b "2 of 8  --  Which LoRaWAN region?"
-p "This one answer configures the network server, both gateway bridges and the"
-p "MQTT topics together, so they can never disagree."
+# --- 2. radio -----------------------------------------------------------------
+b "2 of 8  --  Which radio region?"
+p "Pick the region your gateways are certified for. It is the name printed on"
+p "the gateway's datasheet."
 p ""
-p "  1) us915_0   North America        (channels 0-7, the usual choice)"
-p "  2) eu868     Europe"
-p "  3) au915_0   Australia"
-p "  4) as923     Asia"
-p "  5) something else (I will show you the full list)"
-case "$(ask 'Choose' '1')" in
-  1) REGION=us915_0 ;;
-  2) REGION=eu868 ;;
-  3) REGION=au915_0 ;;
-  4) REGION=as923 ;;
-  *) p ""
-     ls configuration/chirpstack/region_*.toml | sed 's#.*/region_##;s#\.toml##' | column -c 76 2>/dev/null \
-       || ls configuration/chirpstack/region_*.toml | sed 's#.*/region_##;s#\.toml##'
-     p ""
-     while :; do
-       REGION="$(ask 'Region' 'us915_0')"
-       [[ -f "configuration/chirpstack/region_${REGION}.toml" ]] && break
-       p "  There is no region called '$REGION'. Pick one from the list above."
-     done ;;
-esac
-set_var REGION "$REGION"
+rf_regions | while IFS=$'\t' read -r rf n; do
+  if (( n > 1 )); then
+    printf '  %-9s %2d frequency plans\n' "$rf" "$n"
+  else
+    printf '  %-9s single frequency plan\n' "$rf"
+  fi
+done
+p ""
+p "All of the chosen region's frequency plans are enabled on the server, so a"
+p "gateway can be moved between sub-bands later without touching the server."
+p ""
+while :; do
+  RF_REGION="$(ask 'Radio region' 'US915')"
+  RF_REGION="${RF_REGION^^}"
+  [[ -n "$(region_ids_for "$RF_REGION")" ]] && break
+  p "  '$RF_REGION' is not one of the regions listed above."
+done
+set_var RF_REGION "$RF_REGION"
+
+mapfile -t SUBBANDS < <(region_ids_for "$RF_REGION")
+p ""
+p "$RF_REGION selected: ${#SUBBANDS[@]} frequency plan(s) enabled on the server."
+
+# --- 2b. gateway bridges ------------------------------------------------------
+b "2b of 8  --  Which sub-bands do your gateways transmit on?"
+BRIDGES=""
+if (( ${#SUBBANDS[@]} == 1 )); then
+  # Nothing to choose: one plan, one bridge, the standard port.
+  BRIDGES="${SUBBANDS[0]}:1700"
+  p "$RF_REGION has a single frequency plan, so there is one gateway"
+  p "connection on the standard port: ${SUBBANDS[0]} on UDP 1700."
+else
+  p "Each group of gateways needs its own connection here, on its own port."
+  p "Most sites need exactly one. Add more only if different gateways use"
+  p "different channel plans."
+  p ""
+  for i in "${!SUBBANDS[@]}"; do
+    printf '  %-11s %s\n' "${SUBBANDS[$i]}" "$(region_description "${SUBBANDS[$i]}")"
+  done
+  p ""
+  p "If you are unsure, the first one in the list is the usual choice."
+  p ""
+  _port=1700
+  while :; do
+    _sb="$(ask "Sub-band for connection $(( $(wc -w <<<"$BRIDGES") + 1 ))" "${SUBBANDS[0]}")"
+    if [[ -z "$(rf_of_region_id "$_sb")" ]] || [[ "$(rf_of_region_id "$_sb")" != "$RF_REGION" ]]; then
+      p "  '$_sb' is not a sub-band of $RF_REGION. Pick one from the list above."
+      continue
+    fi
+    if [[ " $BRIDGES " == *" $_sb:"* ]]; then
+      p "  $_sb already has a connection. Pick a different sub-band."
+      continue
+    fi
+    _p="$(ask "  UDP port for $_sb" "$_port")"
+    [[ "$_p" =~ ^[0-9]+$ ]] || { p "  '$_p' is not a port number."; continue; }
+    if [[ " $BRIDGES " == *":$_p "* ]]; then
+      p "  port $_p is already used by another connection."
+      continue
+    fi
+    BRIDGES="${BRIDGES:+$BRIDGES }$_sb:$_p"
+    p "  added: $_sb on UDP port $_p"
+    _port=$(( _p + 1 ))
+    p ""
+    yesno "Add another gateway connection" n || break
+  done
+fi
+set_var GATEWAY_BRIDGES "\"$BRIDGES\""
+p ""
+p "Gateway connections: $BRIDGES"
 
 # --- 3. address ---------------------------------------------------------------
 # This machine's own address on the network, offered as the default. Guessing

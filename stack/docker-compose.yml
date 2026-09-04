@@ -70,63 +70,19 @@ services:
       - POSTGRESQL_HOST=postgres
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?run ./setup.sh first}
       - CHIRPSTACK_API_SECRET=${CHIRPSTACK_API_SECRET:?run ./setup.sh first}
-      - REGION=${REGION:?set REGION in .env}
+      - RF_REGION=${RF_REGION:?set RF_REGION in .env}
       - NET_ID=${NET_ID:-000000}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - MQTT_USERNAME=${MQTT_USERNAME:-}
       - MQTT_PASSWORD=${MQTT_PASSWORD:-}
 
   # ---------------------------------------------------------------------------
-  # Gateway bridge for gateways running the Semtech UDP packet forwarder.
-  # Turn off by removing "udp" from COMPOSE_PROFILES in .env.
+  # Gateway bridges are NOT defined here. One is generated per entry in
+  # GATEWAY_BRIDGES (.env) into compose/gateways.yml, because compose cannot
+  # loop and a site may need several -- an 8-channel sub-band and a 16-channel
+  # one side by side, each on its own UDP port and MQTT topic prefix.
+  # COMPOSE_FILE in .env loads that second file alongside this one.
   # ---------------------------------------------------------------------------
-  chirpstack-gateway-bridge:
-    image: chirpstack/chirpstack-gateway-bridge:${GATEWAY_BRIDGE_VERSION:-4}
-    pull_policy: ${PULL_POLICY:-missing}
-    restart: unless-stopped
-    logging: *logging
-    profiles: ["udp"]
-    ports:
-      - "${BIND_ADDRESS:-0.0.0.0}:${UDP_PORT:-1700}:1700/udp"
-    volumes:
-      - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge:ro
-      - ./certs:/certs:ro
-    environment:
-      - TZ=${TZ:-UTC}
-      - INTEGRATION__MQTT__EVENT_TOPIC_TEMPLATE=${REGION}/gateway/{{ .GatewayID }}/event/{{ .EventType }}
-      - INTEGRATION__MQTT__STATE_TOPIC_TEMPLATE=${REGION}/gateway/{{ .GatewayID }}/state/{{ .StateType }}
-      - INTEGRATION__MQTT__COMMAND_TOPIC_TEMPLATE=${REGION}/gateway/{{ .GatewayID }}/command/#
-      - INTEGRATION__MQTT__AUTH__GENERIC__SERVERS=${MQTT_BROKER_URL:-tcp://mosquitto:1883}
-      - INTEGRATION__MQTT__AUTH__GENERIC__CA_CERT=${MQTT_CA_CERT:-}
-      - INTEGRATION__MQTT__AUTH__GENERIC__USERNAME=${MQTT_USERNAME:-}
-      - INTEGRATION__MQTT__AUTH__GENERIC__PASSWORD=${MQTT_PASSWORD:-}
-    depends_on:
-      - mosquitto
-
-  # ---------------------------------------------------------------------------
-  # Gateway bridge for gateways speaking the Basics Station protocol.
-  # Turn off by removing "basicstation" from COMPOSE_PROFILES in .env.
-  # ---------------------------------------------------------------------------
-  chirpstack-gateway-bridge-basicstation:
-    image: chirpstack/chirpstack-gateway-bridge:${GATEWAY_BRIDGE_VERSION:-4}
-    pull_policy: ${PULL_POLICY:-missing}
-    restart: unless-stopped
-    logging: *logging
-    profiles: ["basicstation"]
-    command: -c /etc/chirpstack-gateway-bridge/chirpstack-gateway-bridge-basicstation-${REGION}.toml
-    ports:
-      - "${BIND_ADDRESS:-0.0.0.0}:${BASICSTATION_PORT:-3001}:3001"
-    volumes:
-      - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge:ro
-      - ./certs:/certs:ro
-    environment:
-      - TZ=${TZ:-UTC}
-      - INTEGRATION__MQTT__AUTH__GENERIC__SERVERS=${MQTT_BROKER_URL:-tcp://mosquitto:1883}
-      - INTEGRATION__MQTT__AUTH__GENERIC__CA_CERT=${MQTT_CA_CERT:-}
-      - INTEGRATION__MQTT__AUTH__GENERIC__USERNAME=${MQTT_USERNAME:-}
-      - INTEGRATION__MQTT__AUTH__GENERIC__PASSWORD=${MQTT_PASSWORD:-}
-    depends_on:
-      - mosquitto
 
   # ---------------------------------------------------------------------------
   # REST / Swagger API. Reached through Caddy, so it is covered by TLS_MODE.

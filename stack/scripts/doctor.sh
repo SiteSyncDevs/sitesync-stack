@@ -3,6 +3,8 @@
 # problem in plain language. Run it any time: ./sitesync doctor
 set -uo pipefail
 
+. "$(dirname "${BASH_SOURCE[0]}")/lib-regions.sh"
+
 QUIET=0
 [[ "${1:-}" == "--quiet-on-success" ]] && QUIET=1
 
@@ -40,20 +42,92 @@ SECRET_PROBLEMS=$PROBLEMS
 [[ "${POSTGRES_PASSWORD:-}" != "chirpstack" ]] || bad "POSTGRES_PASSWORD is still the default 'chirpstack'. Run ./setup.sh."
 (( PROBLEMS == SECRET_PROBLEMS )) && ok "Secrets are set and are not the defaults."
 
-# --- region -----------------------------------------------------------------
-REGION="${REGION:-}"
-if [[ -z "$REGION" ]]; then
-  bad "REGION is not set in .env."
-elif [[ ! -f "configuration/chirpstack/region_${REGION}.toml" ]]; then
-  bad "REGION is '$REGION', but there is no configuration/chirpstack/region_${REGION}.toml."
-  out+="            Valid values are: $(ls configuration/chirpstack/region_*.toml | sed 's#.*/region_##;s#\.toml##' | tr '\n' ' ')"$'\n'
+# --- radio region and gateway bridges ---------------------------------------
+RF_REGION="${RF_REGION:-}"
+if [[ -z "$RF_REGION" ]]; then
+  bad "RF_REGION is not set in .env."
+elif [[ -z "$(region_ids_for "$RF_REGION")" ]]; then
+  bad "RF_REGION is '$RF_REGION', which is not a radio region this stack knows."
+  out+="            Valid: $(rf_regions | cut -f1 | tr '\n' ' ')"$'\n'
 else
-  ok "Region '$REGION' is valid."
-  case ",${COMPOSE_PROFILES:-}," in *,basicstation,*)
-    if [[ ! -f "configuration/chirpstack-gateway-bridge/chirpstack-gateway-bridge-basicstation-${REGION}.toml" ]]; then
-      bad "Basics Station is switched on, but there is no config file for region '$REGION'."
-      out+="            Either pick another region, or remove 'basicstation' from COMPOSE_PROFILES in .env."
-    fi ;;
+  mapfile -t _sb < <(region_ids_for "$RF_REGION")
+  if (( ${#_sb[@]} == 1 )); then
+    ok "$RF_REGION: 1 frequency plan enabled on the server."
+  else
+    ok "$RF_REGION: all ${#_sb[@]} frequency plans enabled on the server."
+  fi
+
+  # The generated file must actually reflect RF_REGION. If someone edited the
+  # template or apply never ran, the server is running a different region set
+  # than .env claims -- gateways would connect and uplinks go nowhere.
+  if [[ -f configuration/chirpstack/chirpstack.toml ]]; then
+    _missing=()
+    for _id in "${_sb[@]}"; do
+      grep -q "\"$_id\"" configuration/chirpstack/chirpstack.toml || _missing+=("$_id")
+    done
+    if (( ${#_missing[@]} )); then
+      bad "the generated chirpstack.toml does not enable: ${_missing[*]}
+            Run ./sitesync apply to regenerate it from RF_REGION."
+    fi
+  else
+    note "configuration/chirpstack/chirpstack.toml has not been generated yet."
+    out+="            ./sitesync apply creates it from the template and RF_REGION."$'\n'
+  fi
+
+  # Gateway bridges
+  if [[ -z "${GATEWAY_BRIDGES:-}" ]]; then
+    bad "GATEWAY_BRIDGES is empty, so no gateway bridge runs and NO GATEWAY can
+            reach this site. Set it in .env, for example:
+                GATEWAY_BRIDGES=\"${_sb[0]}:1700\""
+  else
+    _nb=0; _bad=0
+    declare -A _ports=()
+    for _e in ${GATEWAY_BRIDGES}; do
+      _s="${_e%%:*}"; _p="${_e##*:}"
+      if [[ "$_s" == "$_e" || -z "$_p" ]]; then
+        bad "GATEWAY_BRIDGES entry '$_e' is malformed. Use sub-band:port, e.g. ${_sb[0]}:1700"
+        _bad=1; continue
+      fi
+      if [[ -z "$(rf_of_region_id "$_s")" ]]; then
+        bad "GATEWAY_BRIDGES names '$_s', which is not a known frequency plan."
+        _bad=1; continue
+      fi
+      if [[ "$(rf_of_region_id "$_s")" != "$RF_REGION" ]]; then
+        bad "GATEWAY_BRIDGES names '$_s', which belongs to $(rf_of_region_id "$_s"), not $RF_REGION.
+            Gateways on that plan would connect and their uplinks would go nowhere."
+        _bad=1; continue
+      fi
+      if [[ ! "$_p" =~ ^[0-9]+$ ]]; then
+        bad "GATEWAY_BRIDGES: '$_p' is not a port number (entry '$_e')."; _bad=1; continue
+      fi
+      if [[ -n "${_ports[$_p]:-}" ]]; then
+        bad "GATEWAY_BRIDGES uses port $_p for both ${_ports[$_p]} and $_s. Each needs its own."
+        _bad=1; continue
+      fi
+      _ports[$_p]="$_s"
+      _nb=$((_nb+1))
+    done
+    if (( _bad == 0 )); then
+      _list=""
+      for k in $(printf '%s\n' "${!_ports[@]}" | sort -n); do
+        _list+="${_list:+, }${_ports[$k]} on UDP $k"
+      done
+      if (( _nb == 1 )); then ok "1 gateway bridge: $_list"; else ok "$_nb gateway bridges: $_list"; fi
+    fi
+  fi
+
+  # The generated compose file has to exist, or compose will not even start.
+  if [[ ! -f compose/gateways.yml ]]; then
+    note "compose/gateways.yml has not been generated yet; ./sitesync apply creates it."
+  fi
+  case "${COMPOSE_FILE:-}" in
+    *compose/gateways.yml*) ;;
+    "") bad "COMPOSE_FILE is not set in .env. It must be:
+                COMPOSE_FILE=docker-compose.yml:compose/gateways.yml
+            Without it Docker ignores the gateway bridges entirely." ;;
+    *)  bad "COMPOSE_FILE does not include compose/gateways.yml, so the gateway
+            bridges are ignored. It should be:
+                COMPOSE_FILE=docker-compose.yml:compose/gateways.yml" ;;
   esac
 fi
 
@@ -268,7 +342,7 @@ fi
 # reaches out to a registry that may not be there.
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   _envf="$(mktemp)"
-  printf 'POSTGRES_PASSWORD=x\nCHIRPSTACK_API_SECRET=x\nREGION=%s\n' "${REGION:-eu868}" > "$_envf"
+  printf 'POSTGRES_PASSWORD=x\nCHIRPSTACK_API_SECRET=x\nRF_REGION=%s\n' "${RF_REGION:-EU868}" > "$_envf"
   _prof="$(docker compose --profiles 2>/dev/null | paste -sd, - || true)"
   _absent=()
   while read -r img; do

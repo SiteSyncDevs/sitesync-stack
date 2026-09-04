@@ -84,7 +84,7 @@ handoff() {  # handoff <user> <role> [password]
     integration|integration-rw)
       p "  Subscribe   application/+/device/+/event/up" ;;
     gateway*)
-      p "  Topics      ${REGION:-<region>}/gateway/..." ;;
+      p "  Topics      <sub-band>/gateway/...  (see GATEWAY_BRIDGES in .env)" ;;
   esac
   p "  ---------------------------------------------------------------"
   if [[ -n "$pass" ]]; then
