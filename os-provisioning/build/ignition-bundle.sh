@@ -65,7 +65,12 @@ SWITCH_URL="$IA_BASE/downloads/switch_build"
 # A plain browser UA. Not decoration: the site sits behind a WAF that answers
 # 403 to unrecognised agents, which is the difference between "curl works" and
 # "curl gives errors" on these URLs.
-UA="${IGNITION_UA:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36}"
+#
+# The version here will go stale, and a stale one can itself be refused. That
+# is survivable by design: the download probes several header profiles and
+# uses whichever the host accepts, and IGNITION_UA overrides this outright. If
+# you are updating it, copy the string from a current browser.
+UA="${IGNITION_UA:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36}"
 
 usage() {
   cat <<'EOF'
@@ -316,19 +321,100 @@ verify_sha() {
   [[ "$got" == "$RES_SHA256" ]]
 }
 
+# ---------------------------------------------------------- header probe -----
+# The CDN that serves the .run is fronted by a bot filter, and it does not
+# make the same decisions as the website: the two requests that resolved the
+# version can succeed while the download itself is refused with a 403. The
+# filter judges by request headers, and which combination it likes changes
+# without notice -- a user-agent that worked last quarter is refused this one.
+#
+# So the headers are not guessed. Ask for ONE byte with each candidate profile
+# in turn -- a few hundred bytes of traffic, over in a second -- and use the
+# first that the CDN accepts for the real transfer. Discovering the block here
+# rather than after 1.4 GB is the entire point.
+CURL_HDR=()
+PROFILE_NAME=""
+set_profile() {
+  case "$1" in
+    0) CURL_HDR=(-A "$UA" -H 'Accept: */*' -H "Referer: $IA_BASE/downloads/")
+       PROFILE_NAME="browser user-agent with a referer" ;;
+    1) CURL_HDR=(-A "$UA" -H 'Accept: */*')
+       PROFILE_NAME="browser user-agent" ;;
+    2) CURL_HDR=(-H 'Accept: */*')
+       PROFILE_NAME="curl's own user-agent" ;;
+    3) CURL_HDR=(-A '')
+       PROFILE_NAME="no user-agent at all" ;;
+    *) return 1 ;;
+  esac
+}
+
+probe_profile() {
+  local code
+  # -r 0-0 keeps this to a single byte. No -f: the HTTP code is the answer we
+  # want, including when it is a 403.
+  # No '|| echo 000' here: curl prints its own %{http_code} (000 when it never
+  # got a response) and appending a second one produces "000000", which reads
+  # like a status code and is not one.
+  code="$(curl -sS -L --max-time 30 "${CURL_HDR[@]}" \
+               -r 0-0 -o /dev/null -w '%{http_code}' "$RES_URL" 2>/dev/null)" || true
+  [[ -n "$code" ]] || code="000"
+  case "$code" in
+    206|200) return 0 ;;
+    *) LAST_CODE="$code"; return 1 ;;
+  esac
+}
+
 if [[ -n "$INSTALLER" ]]; then
   cp -f "$INSTALLER" "$RUN_PATH"
 elif [[ -f "$RUN_PATH" ]] && verify_sha "$RUN_PATH"; then
   log "already in the cache and the checksum matches: $RUN_PATH"
 else
   [[ -f "$RUN_PATH" ]] && log "cached copy is stale or corrupt; downloading again"
+
+  LAST_CODE=""
+  ACCEPTED=-1
+  log "checking how the download host wants to be asked"
+  for p in 0 1 2 3; do
+    set_profile "$p"
+    if probe_profile; then
+      ACCEPTED="$p"
+      echo "    accepted: $PROFILE_NAME"
+      break
+    fi
+    echo "    refused ($LAST_CODE): $PROFILE_NAME"
+  done
+
+  if (( ACCEPTED < 0 )); then
+    die "the download host refused every request this script knows how to make
+       (last HTTP status: ${LAST_CODE:-none}).
+         $RES_URL
+
+       Nothing is wrong with the version lookup -- that part worked, which is
+       how we know the file exists and where it is. The CDN is refusing this
+       machine or this client.
+
+       Fastest way round it, and the artifact is identical either way:
+         1. Open the URL above in a browser and let it download.
+         2. Rebuild with:
+              --ignition-run /path/to/$RES_FILENAME
+
+       If a browser on this machine is also refused, it is the network (a
+       proxy or content filter), not the client -- try from somewhere else.
+       Override the user-agent with:  IGNITION_UA='...' $0 ..."
+  fi
+  set_profile "$ACCEPTED"
+
   log "downloading $RES_FILENAME (about 1.5 GB -- this is the slow part)"
-  # --continue-at resumes a partial file, which matters on a hotel connection
-  # far more than it does in the office.
-  curl -fL --retry 3 --retry-delay 5 --continue-at - \
-       -A "$UA" \
+  # Resume only when there is something to resume. Sending a Range header for
+  # a file that does not exist locally yet gives some CDNs one more reason to
+  # say no, and buys nothing.
+  resume=()
+  [[ -s "$RUN_PATH.part" ]] && resume=(--continue-at -)
+  curl -fL --retry 3 --retry-delay 5 "${resume[@]+"${resume[@]}"}" \
+       "${CURL_HDR[@]}" \
        --progress-bar -o "$RUN_PATH.part" "$RES_URL" \
-    || die "download failed: $RES_URL"
+    || die "download failed after the host had accepted the request: $RES_URL
+       A partial file is kept at $RUN_PATH.part and re-running resumes it."
   mv -f "$RUN_PATH.part" "$RUN_PATH"
 fi
 
