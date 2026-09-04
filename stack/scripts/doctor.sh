@@ -292,6 +292,31 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   fi
 fi
 
+# --- does the database actually accept the password in .env? ----------------
+# POSTGRES_PASSWORD is applied ONLY when the database volume is first created.
+# If the volume outlives a change to .env -- a reinstall that did not remove
+# volumes, or someone editing the password -- postgres keeps the old one and
+# ChirpStack cannot log in. The symptom is an endless
+# "password authentication failed for user chirpstack" and a stack that never
+# comes up, with nothing obviously wrong in any config file.
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  if docker compose ps --services --status running 2>/dev/null | grep -qx postgres; then
+    if docker compose exec -T -e PGPASSWORD="${POSTGRES_PASSWORD:-}" postgres \
+         psql -h 127.0.0.1 -U chirpstack -d chirpstack -c 'select 1' >/dev/null 2>&1; then
+      ok "the database accepts the password in .env."
+    else
+      bad "the database is running but rejects the password in .env.
+            The database was created with a different POSTGRES_PASSWORD and keeps
+            it: that password is only ever applied when the volume is first made.
+        Either KEEP the data and change the password to match .env:
+            docker compose exec -T postgres psql -U chirpstack -d postgres \\
+              -c \"ALTER USER chirpstack WITH PASSWORD '\$POSTGRES_PASSWORD';\"
+        or DISCARD the database and start clean (destroys all device data):
+            docker compose down -v && ./sitesync start"
+    fi
+  fi
+fi
+
 # --- compose file itself ----------------------------------------------------
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   if ERR="$(docker compose config -q 2>&1)"; then

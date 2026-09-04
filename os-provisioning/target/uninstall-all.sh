@@ -19,6 +19,8 @@
 # discovered from the live system or a fixed path the installer writes.
 #
 # What it reverses, in the order install.sh created it:
+#   - every container, image and named volume, removed through Docker itself
+#     so it works wherever --data-root points (a separate disk included)
 #   - the six Docker packages and (opt-in) their auto-installed closure
 #   - /etc/docker/daemon.json          and the .bak install.sh leaves
 #   - /etc/containerd/config.toml      and the .bak install.sh leaves
@@ -234,6 +236,28 @@ if command -v loginctl >/dev/null 2>&1; then
 fi
 
 # ------------------------------------------------------------- packages ------
+# --------------------------------------------- containers, images, volumes ---
+# Delete these THROUGH DOCKER, while Docker still exists. Deleting the data
+# root afterwards is not equivalent: the root has to be discovered first, and
+# discovery fails whenever the daemon is already stopped or daemon.json has
+# gone -- in which case a volume living on a separate disk (a --data-root on
+# /data, say) is silently left behind. A leftover postgres volume is not a
+# cosmetic problem: POSTGRES_PASSWORD is only ever applied when the volume is
+# first created, so the next install comes up with a fresh password in .env
+# and a database that still has the old one, and nothing can log in.
+if (( ! KEEP_DATA )) && command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  say "Removing containers, images and volumes through Docker"
+  run "docker ps -aq | xargs -r docker rm -f"          ; ok "containers removed"
+  run "docker volume ls -q | xargs -r docker volume rm -f"
+  ok "named volumes removed (this is where the ChirpStack database lived)"
+  run "docker system prune -af --volumes"              ; ok "images and build cache removed"
+elif (( ! KEEP_DATA )); then
+  warn "Docker is not running, so containers and volumes cannot be removed through it."
+  warn "Falling back to deleting the data directories, which only works if they"
+  warn "can be discovered below. If a volume survives, the next install will fail"
+  warn "with 'password authentication failed for user chirpstack'."
+fi
+
 if (( ! KEEP_PACKAGES )) && (( ${#INSTALLED[@]} )); then
   say "Purging packages"
   # No network and no repo needed to purge; the lock timeout is here because a
