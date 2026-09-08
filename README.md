@@ -21,20 +21,28 @@ path answers it.
 
 ## Where to start
 
-- **Operating or configuring a site** → [`stack/README.md`](stack/README.md).
-  That is the document a technician needs, and it ships to the machine.
 - **Building an install artifact** →
+  [`docs/building-the-bundle.md`](docs/building-the-bundle.md). Runs on your
+  machine, with internet. The short version:
 
   ```bash
   os-provisioning/build/prepare-airgap.sh --latest
   ```
 
   Produces one file in `artifacts/` containing Docker Engine, the container
-  images, and a snapshot of `stack/`. Hand it over, and on the target:
+  images, the Ignition gateway installer, and a snapshot of `stack/`.
+
+- **Installing it at a site** →
+  [`docs/installing-on-target.md`](docs/installing-on-target.md). Written for a
+  technician with no Linux background; covers the site questions and every
+  error the installer can produce. The short version, on the target:
 
   ```bash
   sudo bash install-all.sh
   ```
+
+- **Operating or configuring a site afterwards** →
+  [`stack/README.md`](stack/README.md). That one ships to the machine.
 
 ## Why the stack lives in its own directory
 
