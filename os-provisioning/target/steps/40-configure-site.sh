@@ -5,7 +5,7 @@ banner() { printf '\n########################################\n# %s\n###########
 ok()   { printf '   [ ok ] %s\n' "$*"; }
 fail() { printf '\nFAILED: %s\n' "$*" >&2; exit 1; }
 
-DEST="${AIRGAP_INSTALL_DIR:-/opt/sitesync-chirpstack}"
+DEST="${AIRGAP_INSTALL_DIR:-/opt/sitesync}"
 [[ -f "$DEST/setup.sh" ]] || { echo "   No stack installed at $DEST - nothing to configure."; exit 0; }
 
 banner "Step 40: setting this site up"

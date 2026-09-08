@@ -15,7 +15,7 @@
 #     --skip-configure    stop after the files are in place; run setup.sh later
 #     --resume            carry on from the step that failed last time
 #     --redo NN           re-run one step by number, e.g. --redo 20
-#     --install-dir DIR   where the stack lives (default /opt/sitesync-chirpstack)
+#     --install-dir DIR   where the stack lives (default /opt/sitesync)
 #     --ignition-dir DIR  where Ignition goes. Without this, step 15 asks, and
 #                         defaults to the installer's own /usr/local/bin/ignition
 #
@@ -30,7 +30,7 @@ cd "$HERE"
 
 STATE_DIR=/var/lib/sitesync-airgap
 LOG_DIR=/var/log/sitesync-airgap
-INSTALL_DIR="${INSTALL_DIR:-/opt/sitesync-chirpstack}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/sitesync}"
 SKIP_CONFIGURE=0
 RESUME=0
 REDO=""

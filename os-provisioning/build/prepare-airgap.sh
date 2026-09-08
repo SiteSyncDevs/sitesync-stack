@@ -414,7 +414,7 @@ site's .env, certificates and MQTT users exactly as they are.
 
 3. Apply the update:
 
-       cd /opt/sitesync-chirpstack && ./sitesync apply
+       cd /opt/sitesync && ./sitesync apply
 
 Step 3 is required. Loading images does not restart anything - the stack
 keeps running the old images until the containers are recreated.
@@ -457,7 +457,7 @@ WHAT IT DOES, IN ORDER
   10  installs Docker Engine from the offline package repo
 $( [[ -n "$IGNITION_TARBALL" ]] && echo "  15  installs Ignition ${IGNITION_VERSION_RESOLVED} on the metal and starts the gateway" )
   20  loads the container images
-  30  installs the stack to /opt/sitesync-chirpstack
+  30  installs the stack to /opt/sitesync
   40  asks the site questions and writes the settings
   50  starts it and prints the address
 

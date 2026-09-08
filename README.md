@@ -7,7 +7,7 @@ The repository has two halves, and the split is the important thing about it:
 
 ```
 stack/              Everything that ends up on a customer machine.
-                    Installed to /opt/sitesync-chirpstack.
+                    Installed to /opt/sitesync.
                     This directory, and only this directory, ships.
 
 os-provisioning/

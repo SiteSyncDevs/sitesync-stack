@@ -12,7 +12,7 @@ warn() { printf '   [ note ] %s\n' "$*"; }
 fail() { printf '\nFAILED: %s\n' "$*" >&2; exit 1; }
 cd "$AIRGAP_HERE"
 
-DEST="${AIRGAP_INSTALL_DIR:-/opt/sitesync-chirpstack}"
+DEST="${AIRGAP_INSTALL_DIR:-/opt/sitesync}"
 
 if [[ -z "${AIRGAP_STACK_TARBALL:-}" ]]; then
   banner "Step 30: stack files - none in this artifact"
@@ -21,6 +21,27 @@ if [[ -z "${AIRGAP_STACK_TARBALL:-}" ]]; then
 fi
 
 banner "Step 30: installing the stack to $DEST"
+
+# The stack lived at /opt/sitesync-chirpstack until 2026-09. On a box
+# provisioned under the old name, installing to the new one silently leaves two
+# copies -- and the old one still holds the site's real .env and certificates,
+# so it is the one worth keeping. Say so rather than letting the tech discover
+# it when the wrong directory is the one they edit.
+LEGACY_DEST=/opt/sitesync-chirpstack
+if [[ "$DEST" != "$LEGACY_DEST" && -d "$LEGACY_DEST" ]]; then
+  warn "this machine has an older install at $LEGACY_DEST."
+  if [[ -f "$LEGACY_DEST/.env" ]]; then
+    warn "it holds a configured site (.env, certificates, MQTT users)."
+    warn "To carry that site over to $DEST instead of starting fresh, stop here"
+    warn "and run:"
+    warn "    sudo bash install-all.sh --install-dir $LEGACY_DEST"
+    warn "or move it first:"
+    warn "    cd /opt && sudo systemctl stop 'sitesync-chirpstack-*' 2>/dev/null; sudo mv $LEGACY_DEST $DEST"
+  else
+    warn "it is unconfigured, so nothing is lost by leaving it; delete it when convenient."
+  fi
+  warn "continuing with $DEST."
+fi
 
 # An existing install is never overwritten blindly -- it holds the site's .env,
 # certificates and MQTT users.

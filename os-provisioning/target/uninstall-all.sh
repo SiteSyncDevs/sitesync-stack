@@ -35,9 +35,11 @@
 #   - the apt key and repo definition, if enable-online-updates.sh ever ran
 #   - scratch files install.sh leaves behind when it fails mid-run
 #   - the sitesync-chirpstack-*.service boot unit, disabled and deleted
-#   - /opt/sitesync-chirpstack and its .replaced-* copies (the stack, the site
-#     settings, certificates and MQTT users), plus /var/lib/sitesync-airgap
-#     (the install step markers that drive --resume)
+#   - /opt/sitesync and its .replaced-* copies (the stack, the site settings,
+#     certificates and MQTT users), plus /var/lib/sitesync-airgap (the install
+#     step markers that drive --resume). /opt/sitesync-chirpstack, the name
+#     used before 2026-09, is removed too -- a box installed under the old
+#     name must still reset cleanly.
 #   - the Ignition gateway: its service, the vendor uninstaller, the install
 #     directory and the user the installer created. Its data/ directory --
 #     projects, tag history, the internal database -- is TARRED to
@@ -55,7 +57,12 @@ KEEP_GROUP=0
 KEEP_IGNITION=0
 IGNITION_BACKUP=1
 EXTRA_ROOTS=()
-STACK_DIR_TARGET="${STACK_DIR_TARGET:-/opt/sitesync-chirpstack}"
+STACK_DIR_TARGET="${STACK_DIR_TARGET:-/opt/sitesync}"
+
+# The stack was installed to /opt/sitesync-chirpstack before 2026-09. A reset
+# on a box provisioned under the old name has to clear that too, or the next
+# install leaves a stale .env and certificates behind and "clean" is a lie.
+LEGACY_STACK_DIRS=(/opt/sitesync-chirpstack)
 
 usage() { sed -n '3,45p' "$0" | sed 's/^# \{0,1\}//'; cat <<'EOF'
 
@@ -459,7 +466,12 @@ done
 for d in /etc/systemd/system/docker.service.d /etc/systemd/system/containerd.service.d; do
   [[ -d "$d" ]] && run "rmdir '$d' 2>/dev/null || true"
 done
-run "systemctl daemon-reload"
+# Not fatal, and it must not be: under 'set -e' a systemctl that cannot reach
+# the bus -- a container, a half-torn-down box, a broken systemd -- aborted the
+# whole uninstall right here, BEFORE the stack and the data roots were removed.
+# The script then exited 1 having cleaned up almost nothing, which is the exact
+# failure it exists to prevent.
+run "systemctl daemon-reload >/dev/null 2>&1 || true"
 
 for f in "${CONFIGS[@]}"; do
   [[ -e "$f" ]] || continue
@@ -493,18 +505,22 @@ if (( ! KEEP_DATA )); then
     ok "removed /var/lib/sitesync-airgap (install step markers)"
   fi
 
-  if [[ -d "$STACK_DIR_TARGET" ]]; then
-    # This holds the site's .env, certificates and MQTT users. Keeping it would
-    # make the next install silently reuse the old settings and skip setup.sh.
-    run "rm -rf --one-file-system -- '$STACK_DIR_TARGET'"
-    ok "removed $STACK_DIR_TARGET (settings, certificates, MQTT users)"
-  fi
+  # The current path and every name this stack has been installed under before.
+  for sd in "$STACK_DIR_TARGET" "${LEGACY_STACK_DIRS[@]+"${LEGACY_STACK_DIRS[@]}"}"; do
+    if [[ -d "$sd" ]]; then
+      # This holds the site's .env, certificates and MQTT users. Keeping it
+      # would make the next install silently reuse the old settings and skip
+      # setup.sh.
+      run "rm -rf --one-file-system -- '$sd'"
+      ok "removed $sd (settings, certificates, MQTT users)"
+    fi
 
-  # The previous-version copies step 30 leaves behind.
-  while IFS= read -r old; do
-    [[ -n "$old" ]] || continue
-    run "rm -rf --one-file-system -- '$old'"; ok "removed $old"
-  done < <(find "$(dirname "$STACK_DIR_TARGET")" -maxdepth 1 -name "$(basename "$STACK_DIR_TARGET").replaced-*" 2>/dev/null || true)
+    # The previous-version copies step 30 leaves behind.
+    while IFS= read -r old; do
+      [[ -n "$old" ]] || continue
+      run "rm -rf --one-file-system -- '$old'"; ok "removed $old"
+    done < <(find "$(dirname "$sd")" -maxdepth 1 -name "$(basename "$sd").replaced-*" 2>/dev/null || true)
+  done
 else
   if [[ -d "$STACK_DIR_TARGET" || -d /var/lib/sitesync-airgap ]]; then
     say "Keeping the SiteSync stack (--keep-data)"

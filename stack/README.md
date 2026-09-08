@@ -31,7 +31,7 @@ site, and the target never needs an internet connection.
 00-preflight       checks the machine BEFORE anything is changed
 10-docker-engine   installs Docker from the offline package repo
 20-load-images     loads the container images and confirms each one
-30-install-stack   puts the stack in /opt/sitesync-chirpstack
+30-install-stack   puts the stack in /opt/sitesync
 40-configure-site  asks the site questions, writes .env
 50-verify          starts it, runs doctor, prints the address
 ```

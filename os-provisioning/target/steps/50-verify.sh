@@ -2,7 +2,7 @@
 # Confirms the result and tells the tech exactly what they have.
 set -Eeuo pipefail
 banner() { printf '\n########################################\n# %s\n########################################\n' "$*"; }
-DEST="${AIRGAP_INSTALL_DIR:-/opt/sitesync-chirpstack}"
+DEST="${AIRGAP_INSTALL_DIR:-/opt/sitesync}"
 SUMMARY_ONLY=0
 [[ "${1:-}" == "--summary-only" ]] && SUMMARY_ONLY=1
 
