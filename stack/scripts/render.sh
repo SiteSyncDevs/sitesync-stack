@@ -170,9 +170,28 @@ served_parse "$_served" SERVED_REGIONS || { printf '%s\n' "$SERVED_ERROR" >&2; e
 
 _quoted=""
 for _id in "${SERVED_IDS[@]}"; do _quoted+="${_quoted:+, }\"$_id\""; done
+
+# chirpstack.toml is bind-mounted into the container. "compose up -d" compares
+# service definitions, not the contents of mounted files, so a changed region
+# list does NOT restart ChirpStack and the new region silently never loads --
+# gateways connect to the new bridge and their uplinks go nowhere.
+#
+# Leave a marker when the file actually changed so ./sitesync can restart the
+# one container that needs it. Comparing rather than always restarting keeps
+# an unrelated apply (a TLS change, a new MQTT user) from dropping the network
+# server for a few seconds.
+CS_TOML=configuration/chirpstack/chirpstack.toml
+CS_MARKER=.chirpstack-config-changed
+_prev_toml=""
+[[ -f "$CS_TOML" ]] && _prev_toml="$(cat "$CS_TOML" 2>/dev/null || true)"
+
 sed "s|__ENABLED_REGIONS__|$_quoted|" \
   configuration/chirpstack/chirpstack.toml.template \
-  > configuration/chirpstack/chirpstack.toml
+  > "$CS_TOML"
+
+if [[ "$_prev_toml" != "$(cat "$CS_TOML")" ]]; then
+  : > "$CS_MARKER"
+fi
 echo "  $RF_REGION: ${#SERVED_IDS[@]} region(s) enabled -- $(served_describe)"
 
 # ------------------------------------------------- gateway bridge instances ---

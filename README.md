@@ -7,7 +7,9 @@ The repository has two halves, and the split is the important thing about it:
 
 ```
 stack/              Everything that ends up on a customer machine.
-                    Installed to /opt/sitesync.
+                    Installed to /opt/sitesync, or to <root>/sitesync with
+                    a symlink from /opt/sitesync when the installer is given
+                    a data drive (--install-root).
                     This directory, and only this directory, ships.
 
 os-provisioning/

@@ -18,6 +18,9 @@ stack/configuration/mosquitto/conf.d/*
 !stack/configuration/mosquitto/conf.d/.keep
 stack/configuration/chirpstack/chirpstack.toml
 stack/compose/gateways.yml
+# Left by render.sh when chirpstack.toml changed, cleared once the container
+# has been restarted to pick it up.
+stack/.chirpstack-config-changed
 
 # Backups and imported device data.
 stack/backups/

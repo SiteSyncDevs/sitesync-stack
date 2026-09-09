@@ -29,10 +29,11 @@ site, and the target never needs an internet connection.
 
 ```
 00-preflight       checks the machine BEFORE anything is changed
-10-docker-engine   installs Docker from the offline package repo
-20-load-images     loads the container images and confirms each one
-30-install-stack   puts the stack in /opt/sitesync
-40-configure-site  asks the site questions, writes .env
+10-docker-engine   installs Docker from the offline package repo    [docker]
+15-ignition        installs the Ignition gateway on the metal       [ignition]
+20-load-images     loads the container images and confirms each one [chirpstack]
+30-install-stack   puts the stack in place, owned by the sitesync group
+40-configure-site  asks the site questions, writes .env             [chirpstack]
 50-verify          starts it, runs doctor, prints the address
 ```
 
@@ -44,6 +45,39 @@ attempted nothing after it, and everything printed is also written to
 sudo bash install.sh --resume     # carry on from the step that failed
 sudo bash install.sh --redo 20    # re-run one step
 ```
+
+**Where it installs.** By default the stack goes to `/opt/sitesync`, Docker's
+data to `/var/lib/docker`, and Ignition to `/usr/local/bin/ignition`. If the
+machine has a second drive the installer offers to put all three on it:
+
+```bash
+sudo bash install.sh --install-root /data
+#   /data/sitesync    the stack, with /opt/sitesync symlinked to it
+#   /data/docker      Docker's data-root and containerd's root
+#   /data/ignition    the Ignition gateway
+```
+
+`/opt/sitesync` keeps working either way — it becomes a symlink, so every
+command and log message that names that path is still correct. `--install-dir`,
+`--data-root` and `--ignition-dir` still override the derived layout
+individually.
+
+**Installing only part of it.** The bracketed names above are components, and
+each can be selected or skipped. Useful for adding Ignition to a box that
+already runs ChirpStack, or preparing Docker ahead of a maintenance window:
+
+```bash
+sudo bash install.sh --only-ignition
+sudo bash install.sh --only-docker --only-chirpstack
+sudo bash install.sh --no-ignition
+```
+
+Preflight and verification always run, narrowed to what was selected, and the
+installer prints a **Plan** of what it will touch before it starts.
+
+> `install.sh` was called `install-all.sh` before 2026-09, and `uninstall.sh`
+> was `uninstall-all.sh`. The old names still work — a shim ships in the
+> artifact and forwards to the new one — but they will be removed.
 
 `00-preflight` is deliberately first and changes nothing. It checks the Ubuntu
 release and architecture against what the artifact was built for, conflicting
@@ -122,10 +156,20 @@ what it does and what the valid values are. Change what you need, save, then:
 plain-English explanation rather than a broken site.
 
 It also reloads the services that read their configuration from a file on disk
-— the web server and the MQTT broker. This is not optional housekeeping: Docker
-only recreates a container when its *definition* changes, so editing a mounted
-config file otherwise has no effect at all and the site keeps running the
-settings it started with.
+— the web server, the MQTT broker, and ChirpStack itself. This is not optional
+housekeeping: Docker only recreates a container when its *definition* changes,
+so editing a mounted config file otherwise has no effect at all and the site
+keeps running the settings it started with.
+
+| Service | What triggers it | What happens |
+|---|---|---|
+| Caddy | any change to the generated Caddyfile | validated, then restarted (~1s of web downtime) |
+| Mosquitto | users or permissions changed | `SIGHUP`; no connection is dropped |
+| ChirpStack | the enabled region list changed | restarted, a few seconds on the network server only |
+
+ChirpStack is restarted **only** when `chirpstack.toml` actually changed —
+`apply` compares the file it generated against the previous one. An unrelated
+change (a new MQTT user, a TLS switch) leaves the network server alone.
 
 The web server's configuration is **validated before anything is touched**. If
 it is not valid, nothing changes and the error is printed — a bad edit cannot
@@ -134,8 +178,32 @@ about a second on the web interface and touches no other service. (A restart
 rather than a live reload, because `caddy reload` needs the admin API and this
 stack switches that off.)
 
-Hand-editing files under `configuration/chirpstack/` is the exception — those
-are read once at startup, so run `./sitesync restart` after changing them.
+Hand-editing other files under `configuration/chirpstack/` is the exception —
+those are read once at startup and nothing detects the edit, so run
+`./sitesync restart` after changing them.
+
+---
+
+## Who can run this
+
+The stack is owned by `root:sitesync`, not by whoever installed it — a site
+outlives the technician who set it up, and one person's account owning
+everything means the next admin cannot read `.env` without `sudo`.
+
+To give someone access:
+
+```bash
+sudo usermod -aG sitesync,docker THEIR_NAME
+```
+
+They log out and back in once. That is the whole procedure; no `chown`, no
+`sudo` afterwards.
+
+The group only reaches a shell at the next login, so **right after an install
+the person who ran it is not yet in it**. Until they log out and back in,
+`./sitesync` may report that the MQTT password file is not readable in this
+session. That message is harmless — nothing depends on reading it from the
+host, and it disappears after the re-login.
 
 If you are ever unsure what state things are in:
 
@@ -384,22 +452,30 @@ Do not tell a customer "TLS is on" and mean all of it.
 ## Layout
 
 ```
-.env                    the only file you edit          (never committed)
+.env                    the settings file               (never committed)
 mqtt-users.conf         who may connect to MQTT         (never committed)
 .env.example            the annotated template
 setup.sh                first-time wizard
 sitesync                every day-to-day command
 scripts/                what sitesync actually runs
+  lib-regions.sh        region vocabulary + the SERVED_REGIONS parser
+  lib-mqtt.sh           who owns and may read the MQTT password file
 certs/                  your certificates, if any       (never committed)
 backups/                ./sitesync backup writes here   (never committed)
 systemd/                start-on-boot installer
+compose/gateways.yml    generated: one bridge per SERVED_REGIONS entry
 configuration/
   caddy/modes/          one short file per TLS_MODE — readable without knowing Caddy
   chirpstack/           network server + one file per region
+                        chirpstack.toml is generated from SERVED_REGIONS
   chirpstack-gateway-bridge/
   mosquitto/            broker; conf.d/ is generated from .env
   postgresql/initdb/
 ```
+
+Installed on a data drive, all of the above lives under `<root>/sitesync` and
+`/opt/sitesync` is a symlink to it. It is a symlink, not a stray copy — leave
+it in place.
 
 ---
 

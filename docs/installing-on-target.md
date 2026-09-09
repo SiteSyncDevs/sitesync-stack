@@ -199,13 +199,42 @@ permanent.
 |---|---|---|
 | **1** | Who is this site for? | A short lowercase name, no spaces — `acme`. Then the full name for reports — `Acme Manufacturing`. |
 | **2** | Which radio region? | From the gateway's datasheet. `US915` in North America, `EU868` in Europe. The list of valid options is printed on screen. |
-| **2b** | Which sub-bands do your gateways transmit on? | **Most sites: press Enter at each prompt** — first sub-band, UDP port 1700, then "no" to adding another. Only add more if different gateways use different channel plans. Regions with a single frequency plan skip this entirely. |
+| **2b** | Which sub-bands does this site serve? | First it asks whether your gateways use the plain UDP packet forwarder — **almost always yes, press Enter**. Then: **press Enter at each prompt** — first sub-band, UDP port 1700, then "no" to adding another. Only add more if different gateways use different channel plans. Regions with a single frequency plan skip the rest. See below if your gateways run the MQTT Forwarder instead. |
 | **3** | What address will people type in their browser? | **The most important answer here.** See below. |
 | **4** | How should the web interface be secured? | **Press Enter for `1) self-signed`** unless the customer already has a certificate. Browsers show a one-time warning that you click past. |
 | **5** | Should MQTT require a login? | **Yes** (press Enter). A password is generated for you; see it later with `./sitesync mqtt-info`. |
 | **6** | Should MQTT traffic be encrypted? | **No** (press Enter) if the gateways are on the same network or a VPN. Yes only if they cross the public internet. |
-| **7** | Which gateway protocols does this site use? | **Yes to all three** (press Enter three times) unless you have been told otherwise. Unused ones cost nothing. |
+| **7** | Which gateway protocols does this site use? | **Yes to both** (press Enter twice) unless you have been told otherwise. Unused ones cost nothing. The REST API is no longer asked about — it is required on every SiteSync site and is always installed. |
 | **8** | Generating secrets | Nothing to answer. It generates them. |
+
+### About question 2b — gateway bridge or MQTT Forwarder
+
+Question 2b asks how gateway traffic reaches this machine. There are two
+answers and you need to know which one before you start:
+
+**A gateway bridge here (the usual answer).** The gateway sends the plain
+Semtech UDP packet-forwarder protocol at this machine, which listens on a UDP
+port — 1700 by default. Almost every gateway ships configured this way. Say
+**yes** to the "plain UDP packet forwarder" question and give a port.
+
+**The gateway's own MQTT Forwarder.** Some gateways run ChirpStack's MQTT
+Forwarder themselves and publish straight to this site's broker. Nothing
+listens on a UDP port for them, so no bridge container is created. Say **no**
+to the "plain UDP packet forwarder" question.
+
+Those gateways each need an MQTT login, which you create after the install:
+
+```bash
+cd /opt/sitesync
+./sitesync mqtt add gw-north gateway
+```
+
+That prints the username and password once. Put them into the gateway's
+forwarder configuration, along with the sub-band name (`us915_0`) as its topic
+prefix.
+
+If you are not sure which one you have, it is a bridge. Ask before choosing the
+other.
 
 ### About question 3 — get this one right
 
@@ -273,8 +302,21 @@ cd /opt/sitesync
 sudo bash systemd/install.sh
 ```
 
-**Log out and back in.** The install added your account to the `docker` group,
-which does not take effect until you do. Until then, `./sitesync` needs `sudo`.
+**Log out and back in.** The install added your account to the `docker` and
+`sitesync` groups, and neither takes effect until you do. Until then
+`./sitesync` needs `sudo`, and some commands will say the password file is not
+readable in this session — that message is harmless and goes away after you log
+back in.
+
+**Give the other admins access.** The site is owned by the `sitesync` group so
+it does not belong to whoever happened to install it. For each person who
+should be able to run `./sitesync` without `sudo`:
+
+```bash
+sudo usermod -aG sitesync,docker THEIR_NAME
+```
+
+They log out and back in once, and that is all.
 
 **Everyday commands**, all run from `/opt/sitesync`:
 
@@ -283,8 +325,29 @@ which does not take effect until you do. Until then, `./sitesync` needs `sudo`.
 | `./sitesync status` | Is it running, and what is the address |
 | `./sitesync doctor` | Check the settings for problems |
 | `./sitesync logs` | Watch what a service is saying |
+| `./sitesync region list` | Which sub-bands this site serves |
+| `./sitesync region add` | Serve another sub-band — see below |
 | `./sitesync mqtt-info` | Show the generated MQTT username and password |
 | `nano .env` then `./sitesync apply` | Change any setting from setup |
+
+### Adding a sub-band later
+
+When a customer buys gateways on a different channel plan, you do not edit any
+files:
+
+```bash
+cd /opt/sitesync
+./sitesync region add
+```
+
+It lists the sub-bands not yet in use, asks which one, asks for a UDP port
+(suggesting the next free one) or whether that gateway runs its own MQTT
+Forwarder, and then applies the change — including restarting ChirpStack so the
+new region actually loads. Point the gateway at the port it prints.
+
+`./sitesync region remove us915_12` undoes it, after confirming. Gateways on
+that sub-band stop reaching the site; devices, applications and stored data are
+untouched.
 
 ---
 

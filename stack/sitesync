@@ -101,9 +101,32 @@ cmd_render() {
 # the service definition, not the contents of mounted files. Without this, an
 # edit to the Caddyfile or a regenerated MQTT password file simply never takes
 # effect, and the site keeps running the configuration it started with.
+#
+# Takes the list of services that were running BEFORE compose ran. A container
+# compose has just created is already using the new configuration, so it needs
+# no reload -- passing the after-the-fact list made every cold start restart
+# Caddy a second after starting it.
 reload_mounted_config() {
-  local running
-  running="$("${DC[@]}" ps --services --status running 2>/dev/null || true)"
+  local running="${1-}"
+  [[ -n "${1+set}" ]] || running="$("${DC[@]}" ps --services --status running 2>/dev/null || true)"
+
+  # ChirpStack reads its region list from a bind-mounted chirpstack.toml, so a
+  # changed region only takes effect when the container restarts. render.sh
+  # leaves the marker when, and only when, that file actually changed.
+  if [[ -f .chirpstack-config-changed ]]; then
+    if grep -qx chirpstack <<<"$running"; then
+      if "${DC[@]}" restart chirpstack >/dev/null 2>&1; then
+        ok "ChirpStack restarted to pick up the new region list"
+        rm -f .chirpstack-config-changed
+      else
+        bad "ChirpStack would not restart. See why with:  ./sitesync logs chirpstack"
+        return 1
+      fi
+    else
+      # Not running yet: whatever starts it next reads the new file anyway.
+      rm -f .chirpstack-config-changed
+    fi
+  fi
 
   if grep -qx caddy <<<"$running"; then
     local err
@@ -138,9 +161,12 @@ reload_mounted_config() {
 cmd_start() {
   require_docker; require_env; cmd_render
   bold "Starting ${SITE_LABEL:-this site}..."
+  # What was already up, captured before compose changes anything: only those
+  # containers can be running stale mounted configuration.
+  local was_running
+  was_running="$("${DC[@]}" ps --services --status running 2>/dev/null || true)"
   "${DC[@]}" up -d
-  # Harmless on a cold start; essential when the containers were already up.
-  reload_mounted_config || true
+  reload_mounted_config "$was_running" || true
   echo
   cmd_status
 }
@@ -171,9 +197,11 @@ cmd_apply() {
     die "Not applying anything until the problems above are fixed."
   fi
   bold "Applying changes..."
+  local was_running
+  was_running="$("${DC[@]}" ps --services --status running 2>/dev/null || true)"
   # --remove-orphans cleans up services you switched off in COMPOSE_PROFILES.
   "${DC[@]}" up -d --remove-orphans
-  reload_mounted_config || true
+  reload_mounted_config "$was_running" || true
   echo
   cmd_status
 }
@@ -288,14 +316,20 @@ cmd_region_list() {
     info "  none -- no gateway can connect. Add one with:  ./sitesync region add"
     return 0
   fi
+  # Built as one "id<TAB>how" stream fed through a single table pass, rather
+  # than a region_description subshell per row.
   local id
   for id in "${SERVED_IDS[@]}"; do
     if [[ "${SERVED_HOW[$id]}" == forwarder ]]; then
-      printf '  %-11s  %-18s %s\n' "$id" "MQTT Forwarder" "$(region_description "$id")"
+      printf '%s\t%s\n' "$id" "MQTT Forwarder"
     else
-      printf '  %-11s  %-18s %s\n' "$id" "UDP ${SERVED_HOW[$id]}" "$(region_description "$id")"
+      printf '%s\t%s\n' "$id" "UDP ${SERVED_HOW[$id]}"
     fi
-  done
+  done | awk -F'\t' -v tbl="$(region_table)" '
+    BEGIN { n = split(tbl, rows, "\n")
+            for (i = 1; i <= n; i++) { split(rows[i], c, "\t"); desc[c[2]] = c[3] } }
+    { printf "  %-11s  %-18s %s\n", $1, $2, desc[$1] }
+  '
   echo
   local avail=() i
   mapfile -t i < <(region_ids_for "${RF_REGION:-}")
@@ -323,9 +357,7 @@ cmd_region_add() {
     bold "Add a region to ${SITE_LABEL:-this site}"
     echo
     info "Sub-bands of $RF_REGION not yet served:"
-    for id in "${avail[@]}"; do
-      printf '  %-11s %s\n' "$id" "$(region_description "$id")"
-    done
+    region_menu "${avail[@]}"
     echo
     read -r -p "Which sub-band [${avail[0]}]: " sub </dev/tty \
       || die "This needs a terminal. Pass the sub-band as an argument instead."

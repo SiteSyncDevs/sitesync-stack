@@ -14,21 +14,49 @@
 
 REGION_DIR="${REGION_DIR:-configuration/chirpstack}"
 
-_region_field() {  # _region_field <file> <field>
-  sed -n "s/^[[:space:]]*$2=\"\([^\"]*\)\".*/\1/p" "$1" | head -1
+# Every region file as "RF_REGION<TAB>region_id<TAB>description"
+#
+# One awk pass over every file, not four sed invocations and a subshell per
+# file. There are 30-odd region files, and the old shape cost roughly 120
+# processes per call -- with region_description called once per sub-band, that
+# was thousands of processes to print a 16-line menu, and it showed.
+#
+# Written for mawk (Ubuntu's default awk), so no ENDFILE and no gensub: the
+# end of a file is detected by FNR==1 on the next one.
+_region_table_build() {
+  local f found=0
+  for f in "$REGION_DIR"/region_*.toml; do [[ -f "$f" ]] && { found=1; break; }; done
+  (( found )) || return 0
+
+  awk '
+    function val(s) {
+      if (match(s, /"[^"]*"/)) return substr(s, RSTART + 1, RLENGTH - 2)
+      return ""
+    }
+    function emit(   rf) {
+      if (cn != "" && id != "") {
+        rf = cn
+        sub(/_[0-9]+$/, "", rf)
+        printf "%s\t%s\t%s\n", rf, id, de
+      }
+    }
+    FNR == 1 { if (NR > 1) emit(); cn = ""; id = ""; de = "" }
+    cn == "" && /^[[:space:]]*common_name[[:space:]]*=/  { cn = val($0) }
+    id == "" && /^[[:space:]]*id[[:space:]]*=/           { id = val($0) }
+    de == "" && /^[[:space:]]*description[[:space:]]*=/  { de = val($0) }
+    END { emit() }
+  ' "$REGION_DIR"/region_*.toml | sort
 }
 
-# Every region file as "RF_REGION<TAB>region_id<TAB>description"
+# Built once per process. Every caller below goes through this, and several of
+# them are called in a loop, so the difference is the whole cost of the menu.
+_REGION_TABLE_CACHE=""
 region_table() {
-  local f cn id de
-  for f in "$REGION_DIR"/region_*.toml; do
-    [[ -f "$f" ]] || continue
-    cn="$(_region_field "$f" common_name)"
-    id="$(_region_field "$f" id)"
-    de="$(_region_field "$f" description)"
-    [[ -n "$cn" && -n "$id" ]] || continue
-    printf '%s\t%s\t%s\n' "$(sed 's/_[0-9]\+$//' <<<"$cn")" "$id" "$de"
-  done | sort
+  if [[ -z "$_REGION_TABLE_CACHE" ]]; then
+    _REGION_TABLE_CACHE="$(_region_table_build)"
+  fi
+  [[ -n "$_REGION_TABLE_CACHE" ]] && printf '%s\n' "$_REGION_TABLE_CACHE"
+  return 0
 }
 
 # Distinct RF regions, with how many region files each has.
@@ -51,6 +79,18 @@ region_description() {  # region_description us915_12
 }
 
 region_id_exists() { [[ -n "$(rf_of_region_id "$1")" ]]; }
+
+# Print "  <id>  <description>" for each id given, in the order given, using a
+# single pass over the table. The obvious loop calling region_description per
+# row spawns a subshell and an awk for every line of the menu.
+region_menu() {  # region_menu us915_0 us915_1 ...
+  (( $# )) || return 0
+  region_table | awk -F'\t' -v want="$*" '
+    BEGIN { n = split(want, a, " ") }
+    { desc[$2] = $3 }
+    END { for (i = 1; i <= n; i++) printf "  %-11s %s\n", a[i], desc[a[i]] }
+  '
+}
 
 # ----------------------------------------------------------- SERVED_REGIONS --
 # The sub-bands this site serves, and how each one reaches the server:

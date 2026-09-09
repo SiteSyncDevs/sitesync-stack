@@ -173,6 +173,24 @@ sudo bash install.sh
 
 and point them at [`installing-on-target.md`](installing-on-target.md).
 
+Two options worth mentioning to them if either applies to the machine:
+
+```bash
+# the VM has a second drive -- puts the stack, Docker and Ignition all on it
+sudo bash install.sh --install-root /data
+
+# only part of the artifact is wanted on this box
+sudo bash install.sh --only-ignition
+sudo bash install.sh --no-ignition
+```
+
+The installer offers the data drive on its own if it finds one, so the first is
+only needed when they declined it or mounted the drive afterwards.
+
+> The artifact also carries an `install-all.sh` shim, because that was the name
+> before 2026-09 and it is written down in older runbooks. It forwards to
+> `install.sh` and prints a note.
+
 ---
 
 ## Build-time troubleshooting

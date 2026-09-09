@@ -206,9 +206,7 @@ else
   p "Most sites serve exactly one sub-band. Add more only if different"
   p "gateways use different channel plans."
   p ""
-  for i in "${!SUBBANDS[@]}"; do
-    printf '  %-11s %s\n' "${SUBBANDS[$i]}" "$(region_description "${SUBBANDS[$i]}")"
-  done
+  region_menu "${SUBBANDS[@]}"
   p ""
   p "If you are unsure, the first one in the list is the usual choice."
   p ""
