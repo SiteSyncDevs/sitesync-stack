@@ -3,8 +3,10 @@
 # Reached through: ./sitesync mqtt <command>
 set -euo pipefail
 
+. "$(dirname "${BASH_SOURCE[0]}")/lib-mqtt.sh"
+
 USERS=mqtt-users.conf
-PASSWD=configuration/mosquitto/config/passwd
+PASSWD="$MOSQ_PASSWD"
 MOSQ_IMAGE="eclipse-mosquitto:${MOSQUITTO_VERSION:-2}"
 
 b() { printf '\n\033[1m%s\033[0m\n' "$*"; }
@@ -47,7 +49,7 @@ user_exists() { grep -qE "^[[:space:]]*$1[[:space:]]" "$USERS" 2>/dev/null; }
 # produces "Unable to open pwfile" and a broker that restarts forever.
 set_password() {
   local user="$1" pass="$2" flag="" HOST_GID
-  HOST_GID="$(id -g)"
+  HOST_GID="$(mqtt_gid)"
   [[ -f "$PASSWD" ]] || flag="-c"
   docker run --rm -v "$PWD/configuration/mosquitto/config:/mosquitto/config" \
     "$MOSQ_IMAGE" sh -euc '
@@ -146,7 +148,7 @@ cmd_remove() {
       mosquitto_passwd -D /mosquitto/config/passwd "$1" >/dev/null 2>&1 || true
       chown 1883:"$2" /mosquitto/config/passwd
       chmod 640 /mosquitto/config/passwd
-    ' _ "$user" "$(id -g)" || true
+    ' _ "$user" "$(mqtt_gid)" || true
   bash scripts/render.sh >/dev/null
   reload_broker
   p "Removed '$user'."
@@ -157,15 +159,20 @@ cmd_list() {
   b "MQTT users for ${SITE_LABEL:-this site}"
   printf '  %-22s %-16s %s\n' "USERNAME" "ROLE" "CAN CONNECT"
   local any=0
+  # One container read for the whole table. Reading the file from the host
+  # fails whenever the operator's group has not reached this shell yet, which
+  # used to render every row as "cannot read the password file".
+  mapfile -t _withpw < <(mqtt_passwd_users "$MOSQ_IMAGE")
+  _has_pw() {
+    local u="$1" e
+    for e in "${_withpw[@]+"${_withpw[@]}"}"; do [[ "$e" == "$u" ]] && return 0; done
+    return 1
+  }
   while read -r user role _; do
     [[ -z "${user:-}" || "${user:0:1}" == "#" ]] && continue
     any=1
     local state="no password set"
-    if [[ -f "$PASSWD" && ! -r "$PASSWD" ]]; then
-      state="cannot read the password file"
-    elif grep -q "^$user:" "$PASSWD" 2>/dev/null; then
-      state="yes"
-    fi
+    if _has_pw "$user"; then state="yes"; fi
     printf '  %-22s %-16s %s\n' "$user" "$role" "$state"
   done < "$USERS"
   (( any )) || p "  (none yet -- add one with: ./sitesync mqtt add NAME integration)"
@@ -174,11 +181,6 @@ cmd_list() {
   p "  To give someone a new one:  ./sitesync mqtt reset NAME"
   p
   p "  ChirpStack's own internal login is separate and lives in .env."
-  if [[ -f "$PASSWD" && ! -r "$PASSWD" ]]; then
-    p
-    p "  NOTE: the password file cannot be read by $(id -un), so the column above"
-    p "  is unreliable. Fix it with:  ./sitesync apply"
-  fi
 }
 
 cmd_show() {

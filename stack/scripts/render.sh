@@ -8,6 +8,7 @@ set -euo pipefail
 trap 'echo "" >&2; echo "Could not finish applying the MQTT settings. Nothing was started." >&2; echo "Run ./sitesync doctor, or ask for help with the message above." >&2' ERR
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib-regions.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/lib-mqtt.sh"
 
 CONF_D=configuration/mosquitto/conf.d
 PASSWD=configuration/mosquitto/config/passwd
@@ -33,27 +34,42 @@ randpw() {  # random password; avoids SIGPIPE under `set -o pipefail`
 # On an installed stack that group is 'sitesync', so every admin in it can read
 # the file. Using the caller's own primary group there would quietly re-lock it
 # to one person on the next apply.
-if getent group sitesync >/dev/null 2>&1; then
-  HOST_GID="$(getent group sitesync | cut -d: -f3)"
-else
-  HOST_GID="$(id -g)"
-fi
+HOST_GID="$(mqtt_gid)"
 
-# Repair a passwd file left unreadable by an earlier version (owner 1883,
-# group 1883, which locked out the very user running this). Only a root
-# container can change it back, and we already have one to hand.
+# Put the file back to owner 1883 (the broker) with group read for the
+# operators' group. Only a root container can do it, and we have one to hand.
+#
+# Deliberately NOT conditional on the host being able to read the file, and
+# never fatal when it still cannot afterwards. Group membership only reaches a
+# login shell at the next login, so the very first apply after an install runs
+# as a user who IS in the sitesync group on paper but not yet in this process.
+# Refusing there would block the first apply on every new machine, and telling
+# the operator to delete the password file would throw away every MQTT login on
+# the site to fix a permission bit.
+#
+# Nothing below reads this file from the host anyway -- see passwd_users.
 fix_passwd_perms() {
   [[ -f "$PASSWD" ]] || return 0
-  [[ -r "$PASSWD" ]] && return 0
-  echo "  repairing permissions on $PASSWD ..."
   docker run --rm -v "$PWD/configuration/mosquitto/config:/mosquitto/config" \
     "$MOSQ_IMAGE" sh -euc '
       chown 1883:"$1" /mosquitto/config/passwd
       chmod 640 /mosquitto/config/passwd
     ' _ "$HOST_GID" \
-    || { echo "Could not repair $PASSWD. Delete it and re-run: rm $PASSWD" >&2; return 1; }
-  [[ -r "$PASSWD" ]] || { echo "$PASSWD is still not readable by $(id -un). Delete it and re-run." >&2; return 1; }
+    || { echo "Could not set permissions on $PASSWD." >&2; return 1; }
+  if [[ ! -r "$PASSWD" ]]; then
+    echo "  note: $PASSWD is not readable by $(id -un) in this session."
+    echo "        That is expected right after an install -- log out and back in"
+    echo "        to pick up the 'sitesync' group. Nothing here depends on it."
+  fi
 }
+
+# Who already has a password, read from inside the container as root.
+#
+# The host user may legitimately not be able to read the file: it holds
+# password hashes, it is owned by the broker's uid, and the operator's group
+# membership may not have reached this shell yet. Reading it from the host made
+# every one of those a hard failure. The container always can.
+passwd_users() { mqtt_passwd_users "$MOSQ_IMAGE"; }
 
 set_password() {  # set_password <user> <plaintext>
   local flag=""
@@ -260,6 +276,17 @@ EOF
     echo
   } > "$ACL"
 
+  # One container read, reused for both "who is new" and "who was deleted",
+  # rather than one docker run per user.
+  mapfile -t EXISTING_USERS < <(passwd_users)
+  has_password() {
+    local u="$1" e
+    for e in "${EXISTING_USERS[@]+"${EXISTING_USERS[@]}"}"; do
+      [[ "$e" == "$u" ]] && return 0
+    done
+    return 1
+  }
+
   KNOWN=("$MQTT_USERNAME")
   NEW_PASSWORDS=""
   while read -r user role _; do
@@ -274,12 +301,7 @@ EOF
 
     # A user listed here but with no password yet is new. Give them one and
     # show it once -- it is stored hashed and cannot be recovered later.
-    if [[ -f "$PASSWD" && ! -r "$PASSWD" ]]; then
-      echo "$PASSWD exists but cannot be read by $(id -un)." >&2
-      echo "Delete it and run ./sitesync apply again to reissue passwords:  rm $PASSWD" >&2
-      exit 1
-    fi
-    if ! grep -q "^$user:" "$PASSWD" 2>/dev/null; then
+    if ! has_password "$user"; then
       pw="$(randpw)"
       set_password "$user" "$pw"
       NEW_PASSWORDS+="    $user  ($role)  password: $pw"$'\n'
@@ -287,8 +309,9 @@ EOF
   done < "$USERS"
 
   # Anyone whose line was deleted from mqtt-users.conf loses their login.
+  # EXISTING_USERS is the pre-change list, read through the container above.
   if [[ -f "$PASSWD" ]]; then
-    while IFS=: read -r existing _; do
+    for existing in "${EXISTING_USERS[@]+"${EXISTING_USERS[@]}"}"; do
       [[ -z "$existing" ]] && continue
       keep=0
       for k in "${KNOWN[@]}"; do [[ "$k" == "$existing" ]] && keep=1 && break; done
@@ -301,7 +324,7 @@ EOF
           ' _ "$existing" "$HOST_GID" || true
         echo "  Removed MQTT user '$existing' (no longer listed in mqtt-users.conf)."
       fi
-    done < "$PASSWD"
+    done
   fi
 
   # The ACL holds usernames and topic patterns, no secrets, and the broker

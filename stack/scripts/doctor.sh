@@ -4,6 +4,7 @@
 set -uo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib-regions.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/lib-mqtt.sh"
 
 QUIET=0
 [[ "${1:-}" == "--quiet-on-success" ]] && QUIET=1
@@ -219,6 +220,13 @@ else
 fi
 if [[ "${MQTT_AUTH_ENABLED:-true}" == "true" && -f mqtt-users.conf ]]; then
   BADROLE=0; NOPW=0; COUNT=0
+  # Who has a password, read inside the broker image rather than from the host.
+  # A host read fails whenever the operator's group has not reached this shell,
+  # and doctor would then report every user as having no password.
+  _DOCTOR_WITHPW=()
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    mapfile -t _DOCTOR_WITHPW < <(mqtt_passwd_users "eclipse-mosquitto:${MOSQUITTO_VERSION:-2}" 2>/dev/null)
+  fi
   while read -r u r _; do
     [[ -z "${u:-}" || "${u:0:1}" == "#" ]] && continue
     COUNT=$((COUNT+1))
@@ -229,7 +237,11 @@ if [[ "${MQTT_AUTH_ENABLED:-true}" == "true" && -f mqtt-users.conf ]]; then
          out+="            Valid roles: integration, integration-rw, gateway, gateway:EUI"$'\n'
          BADROLE=1 ;;
     esac
-    grep -q "^$u:" configuration/mosquitto/config/passwd 2>/dev/null || NOPW=$((NOPW+1))
+    _dhas=0
+    for _e in "${_DOCTOR_WITHPW[@]+"${_DOCTOR_WITHPW[@]}"}"; do
+      [[ "$_e" == "$u" ]] && { _dhas=1; break; }
+    done
+    (( _dhas )) || NOPW=$((NOPW+1))
   done < mqtt-users.conf
   if (( BADROLE == 0 )); then
     if (( NOPW > 0 )); then
