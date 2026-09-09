@@ -84,16 +84,22 @@ else
             configuration/chirpstack/region_<id>.toml is missing. The stack
             snapshot is incomplete -- reinstall it from the artifact."
 
-    # The generated file must match the list. If apply never ran, the server is
-    # enforcing a different set than .env claims.
+    # The generated file lagging behind .env is normal and expected -- it is
+    # exactly the state between editing SERVED_REGIONS and running apply.
+    #
+    # This must stay a note, never a problem. apply runs doctor before it does
+    # anything, so making this fatal deadlocks the tool: the only command that
+    # regenerates the file is the one being refused. Anyone who changed a
+    # region would be stuck with no way forward.
     if [[ -f configuration/chirpstack/chirpstack.toml ]]; then
       _missing=()
       for _id in "${SERVED_IDS[@]}"; do
         grep -q "\"$_id\"" configuration/chirpstack/chirpstack.toml || _missing+=("$_id")
       done
       if (( ${#_missing[@]} )); then
-        bad "the generated chirpstack.toml does not enable: ${_missing[*]}
-            Run ./sitesync apply to regenerate it from SERVED_REGIONS."
+        note "chirpstack.toml has not caught up with .env yet: ${_missing[*]}"
+        out+="            ./sitesync apply regenerates it. Until then the server is still"$'\n'
+        out+="            running the previous set of regions."$'\n'
       fi
     else
       note "configuration/chirpstack/chirpstack.toml has not been generated yet."

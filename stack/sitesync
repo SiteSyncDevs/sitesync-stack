@@ -155,11 +155,21 @@ cmd_restart() { cmd_stop; cmd_start; }
 
 cmd_apply() {
   require_docker; require_env
+
+  # Render BEFORE doctor, not after. The generated files are derived from .env,
+  # so judging them before regenerating them is judging the previous run: every
+  # change to SERVED_REGIONS would be reported as a fault by the one command
+  # that fixes it.
+  #
+  # This is safe because render validates as it goes -- a malformed
+  # SERVED_REGIONS, an unknown sub-band or a duplicate port stops it here, with
+  # the same message doctor would give, and nothing is started.
+  cmd_render
+
   bold "Checking your settings first..."
   if ! cmd_doctor --quiet-on-success; then
     die "Not applying anything until the problems above are fixed."
   fi
-  cmd_render
   bold "Applying changes..."
   # --remove-orphans cleans up services you switched off in COMPOSE_PROFILES.
   "${DC[@]}" up -d --remove-orphans
