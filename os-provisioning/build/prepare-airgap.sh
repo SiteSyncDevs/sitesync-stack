@@ -11,7 +11,7 @@
 #   ./prepare-airgap.sh --skip-docker        # image refresh for a VM that has docker
 #   ./prepare-airgap.sh --compose ./docker-compose.yml
 #
-# Operator's job on the target VM:  sudo bash install-all.sh
+# Operator's job on the target VM:  sudo bash install.sh
 #
 # Expects docker-offline-bundle.sh and chirpstack-image-bundle.sh next to this
 # script (override with DOCKER_BUNDLE_SH / CHIRPSTACK_BUNDLE_SH).
@@ -368,15 +368,18 @@ fi
 # os-provisioning/target/ so it can be shellchecked, tested and read in a diff
 # like any other code. It is copied in verbatim.
 log "adding the target-side installer"
-cp -a "$TARGET_DIR/install-all.sh" "$OUTER/install-all.sh"
+cp -a "$TARGET_DIR/install.sh" "$OUTER/install.sh"
 cp -a "$TARGET_DIR/steps" "$OUTER/steps"
 # The uninstaller ships too, so a bad install can be undone on site without
 # waiting for someone to send a script.
-for extra in uninstall-all.sh target-survey.sh; do
+# install-all.sh is the pre-2026-09 name, kept as a shim so a tech working from
+# an older runbook is not stuck at a customer site with no way to look it up.
+for extra in uninstall.sh target-survey.sh install-all.sh; do
   [[ -f "$TARGET_DIR/$extra" ]] && cp -a "$TARGET_DIR/$extra" "$OUTER/$extra"
 done
-chmod +x "$OUTER/install-all.sh" "$OUTER"/steps/*.sh
-chmod +x "$OUTER"/uninstall-all.sh "$OUTER"/target-survey.sh 2>/dev/null || true
+chmod +x "$OUTER/install.sh" "$OUTER"/steps/*.sh
+chmod +x "$OUTER"/uninstall.sh "$OUTER"/target-survey.sh 2>/dev/null || true
+chmod +x "$OUTER"/install-all.sh 2>/dev/null || true
 echo "    steps: $(cd "$OUTER/steps" && ls -1 *.sh | tr '\n' ' ')"
 
 cat > "$OUTER/AIRGAP_INFO" <<EOF
@@ -407,7 +410,7 @@ INSTRUCTIONS
 1. Copy this whole folder onto the server.
 2. Open a terminal in this folder and run:
 
-       sudo bash install-all.sh
+       sudo bash install.sh
 
 The update loads the new images and refreshes the stack files, keeping this
 site's .env, certificates and MQTT users exactly as they are.
@@ -441,14 +444,14 @@ INSTRUCTIONS
 2. Open a terminal in this folder.
 3. Run exactly:
 
-       sudo bash install-all.sh
+       sudo bash install.sh
 
 It will ask you a short list of questions about this site near the end.
 
 Everything runs in the correct order and stops at the first real problem,
 leaving the machine in a state you can re-run from:
 
-       sudo bash install-all.sh --resume
+       sudo bash install.sh --resume
 
 No internet connection is needed on the server.
 
@@ -551,7 +554,7 @@ Artifact ready.
 $( [[ -n "$CS_VERSION" ]] && printf '  chirpstack: %s\n' "$CS_VERSION" )
 
 Hand off with:
-  cd $(dirname "$ARCHIVE") && tar xf $(basename "$ARCHIVE") && cd ${NAME} && sudo bash install-all.sh
+  cd $(dirname "$ARCHIVE") && tar xf $(basename "$ARCHIVE") && cd ${NAME} && sudo bash install.sh
 $( [[ "$RECORDSDIR" != none ]] && cat <<REC
 
 Build records written to $RECORDSDIR:

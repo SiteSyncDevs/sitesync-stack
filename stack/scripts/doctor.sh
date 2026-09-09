@@ -51,68 +51,53 @@ elif [[ -z "$(region_ids_for "$RF_REGION")" ]]; then
   out+="            Valid: $(rf_regions | cut -f1 | tr '\n' ' ')"$'\n'
 else
   mapfile -t _sb < <(region_ids_for "$RF_REGION")
-  if (( ${#_sb[@]} == 1 )); then
-    ok "$RF_REGION: 1 frequency plan enabled on the server."
-  else
-    ok "$RF_REGION: all ${#_sb[@]} frequency plans enabled on the server."
+  ok "$RF_REGION is a region this stack knows (${#_sb[@]} frequency plan(s) available)."
+
+  # --- served regions -------------------------------------------------------
+  # Enabled regions come from SERVED_REGIONS, not from RF_REGION: a region is
+  # enabled because a bridge or an MQTT Forwarder actually serves it.
+  served_load
+  _served="$SERVED_VALUE"
+  if (( SERVED_FROM_LEGACY )); then
+    note ".env still uses the old name GATEWAY_BRIDGES."
+    out+="            ./sitesync apply renames it to SERVED_REGIONS for you."$'\n'
   fi
 
-  # The generated file must actually reflect RF_REGION. If someone edited the
-  # template or apply never ran, the server is running a different region set
-  # than .env claims -- gateways would connect and uplinks go nowhere.
-  if [[ -f configuration/chirpstack/chirpstack.toml ]]; then
-    _missing=()
-    for _id in "${_sb[@]}"; do
-      grep -q "\"$_id\"" configuration/chirpstack/chirpstack.toml || _missing+=("$_id")
-    done
-    if (( ${#_missing[@]} )); then
-      bad "the generated chirpstack.toml does not enable: ${_missing[*]}
-            Run ./sitesync apply to regenerate it from RF_REGION."
-    fi
-  else
-    note "configuration/chirpstack/chirpstack.toml has not been generated yet."
-    out+="            ./sitesync apply creates it from the template and RF_REGION."$'\n'
-  fi
-
-  # Gateway bridges
-  if [[ -z "${GATEWAY_BRIDGES:-}" ]]; then
-    bad "GATEWAY_BRIDGES is empty, so no gateway bridge runs and NO GATEWAY can
+  if [[ -z "$_served" ]]; then
+    bad "SERVED_REGIONS is empty, so no region is enabled and NO GATEWAY can
             reach this site. Set it in .env, for example:
-                GATEWAY_BRIDGES=\"${_sb[0]}:1700\""
+                SERVED_REGIONS=\"${_sb[0]}:1700\"        bridge on UDP 1700
+                SERVED_REGIONS=\"${_sb[0]}:forwarder\"   gateways run MQTT Forwarder
+            or run:  ./sitesync region add"
+  elif ! served_parse "$_served" SERVED_REGIONS; then
+    bad "$SERVED_ERROR"
   else
-    _nb=0; _bad=0
-    declare -A _ports=()
-    for _e in ${GATEWAY_BRIDGES}; do
-      _s="${_e%%:*}"; _p="${_e##*:}"
-      if [[ "$_s" == "$_e" || -z "$_p" ]]; then
-        bad "GATEWAY_BRIDGES entry '$_e' is malformed. Use sub-band:port, e.g. ${_sb[0]}:1700"
-        _bad=1; continue
-      fi
-      if [[ -z "$(rf_of_region_id "$_s")" ]]; then
-        bad "GATEWAY_BRIDGES names '$_s', which is not a known frequency plan."
-        _bad=1; continue
-      fi
-      if [[ "$(rf_of_region_id "$_s")" != "$RF_REGION" ]]; then
-        bad "GATEWAY_BRIDGES names '$_s', which belongs to $(rf_of_region_id "$_s"), not $RF_REGION.
-            Gateways on that plan would connect and their uplinks would go nowhere."
-        _bad=1; continue
-      fi
-      if [[ ! "$_p" =~ ^[0-9]+$ ]]; then
-        bad "GATEWAY_BRIDGES: '$_p' is not a port number (entry '$_e')."; _bad=1; continue
-      fi
-      if [[ -n "${_ports[$_p]:-}" ]]; then
-        bad "GATEWAY_BRIDGES uses port $_p for both ${_ports[$_p]} and $_s. Each needs its own."
-        _bad=1; continue
-      fi
-      _ports[$_p]="$_s"
-      _nb=$((_nb+1))
+    ok "${#SERVED_IDS[@]} region(s) served: $(served_describe)"
+
+    # Every served region needs its plan file present, or ChirpStack names a
+    # region in its config that it cannot load and refuses to start.
+    _absent=()
+    for _id in "${SERVED_IDS[@]}"; do
+      [[ -f "configuration/chirpstack/region_${_id}.toml" ]] || _absent+=("$_id")
     done
-    if (( _bad == 0 )); then
-      _list=""
-      for k in $(printf '%s\n' "${!_ports[@]}" | sort -n); do
-        _list+="${_list:+, }${_ports[$k]} on UDP $k"
+    (( ${#_absent[@]} )) && bad "no region file for: ${_absent[*]}
+            configuration/chirpstack/region_<id>.toml is missing. The stack
+            snapshot is incomplete -- reinstall it from the artifact."
+
+    # The generated file must match the list. If apply never ran, the server is
+    # enforcing a different set than .env claims.
+    if [[ -f configuration/chirpstack/chirpstack.toml ]]; then
+      _missing=()
+      for _id in "${SERVED_IDS[@]}"; do
+        grep -q "\"$_id\"" configuration/chirpstack/chirpstack.toml || _missing+=("$_id")
       done
-      if (( _nb == 1 )); then ok "1 gateway bridge: $_list"; else ok "$_nb gateway bridges: $_list"; fi
+      if (( ${#_missing[@]} )); then
+        bad "the generated chirpstack.toml does not enable: ${_missing[*]}
+            Run ./sitesync apply to regenerate it from SERVED_REGIONS."
+      fi
+    else
+      note "configuration/chirpstack/chirpstack.toml has not been generated yet."
+      out+="            ./sitesync apply creates it from the template and SERVED_REGIONS."$'\n'
     fi
   fi
 

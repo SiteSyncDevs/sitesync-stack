@@ -14,17 +14,17 @@ knowing Linux.
 | --- | --- | --- | --- |
 | **Build** | `os-provisioning/build/prepare-airgap.sh --latest` | your connected machine | once per release |
 | **Transfer** | copy the folder | USB or scp | once per site |
-| **Install** | `sudo bash install-all.sh` | the customer VM | once |
+| **Install** | `sudo bash install.sh` | the customer VM | once |
 | **Configure** | (part of install, step 40) | the customer VM | once per site |
 | **Operate** | `./sitesync ...` | the customer VM | forever |
 | **Update** | `--images-only` artifact | the customer VM | occasionally |
-| **Remove** | `sudo bash uninstall-all.sh` | the customer VM (ships in the artifact) | rarely |
+| **Remove** | `sudo bash uninstall.sh` | the customer VM (ships in the artifact) | rarely |
 
 The artifact carries **everything**: Docker Engine as an offline apt repo, the
 container images, and a snapshot of this stack. Nothing is placed by hand on
 site, and the target never needs an internet connection.
 
-`install-all.sh` is a thin wrapper that runs the numbered steps in
+`install.sh` is a thin wrapper that runs the numbered steps in
 `os-provisioning/target/steps/` in order (in this repo; they are copied into every artifact):
 
 ```
@@ -41,8 +41,8 @@ attempted nothing after it, and everything printed is also written to
 `/var/log/sitesync-airgap/`. Once the cause is fixed:
 
 ```bash
-sudo bash install-all.sh --resume     # carry on from the step that failed
-sudo bash install-all.sh --redo 20    # re-run one step
+sudo bash install.sh --resume     # carry on from the step that failed
+sudo bash install.sh --redo 20    # re-run one step
 ```
 
 `00-preflight` is deliberately first and changes nothing. It checks the Ubuntu
@@ -86,7 +86,7 @@ list is not trusted on its own.
 ```bash
 tar xf airgap-noble-cs4.x.x-<date>.tar
 cd airgap-noble-cs4.x.x-<date>
-sudo bash install-all.sh
+sudo bash install.sh
 ```
 
 That is the whole job. It ends with a configured, running site.
@@ -158,6 +158,7 @@ If you are ever unsure what state things are in:
 | `./sitesync restore FILE` | Put a backup back (asks first) |
 | `./sitesync update` | Move to newer software, backing up first |
 | `./sitesync pin` | Lock exact versions so the next site matches this one |
+| `./sitesync region list\|add\|remove` | See or change which sub-bands this site serves |
 | `./sitesync mqtt add\|list\|reset\|remove` | Manage who may connect to MQTT |
 | `./sitesync mqtt-info` | Print ChirpStack's own MQTT details |
 | `./sitesync ca` | Export the self-signed certificate so browsers trust it |
@@ -166,40 +167,62 @@ If you are ever unsure what state things are in:
 
 ## The settings that matter most
 
-### `RF_REGION` and `GATEWAY_BRIDGES`
+### `RF_REGION` and `SERVED_REGIONS`
 
 Two settings, matching the two questions an operator actually has: *what radio
 is this?* and *what do my gateways transmit on?*
 
 ```bash
 RF_REGION=US915
-GATEWAY_BRIDGES="us915_0:1700 us915_12:1701"
+SERVED_REGIONS="us915_0:1700 us915_12:1701"
 ```
 
 `RF_REGION` is the region on the gateway's datasheet — `US915`, `EU868`,
-`AU915`, `AS923`, `CN470`, and so on. Setting it enables **every** frequency
-plan for that region on the server. For US915 that is all sixteen: the eight
-8-channel sub-bands, the seven 16-channel pairs, and `us915_64ch`. Enabling a
-plan costs nothing until a gateway uses its topic prefix, and having them all
-on means a gateway can move between sub-bands without touching the server.
-Picking `AS923` enables all four AS923 plans.
+`AU915`, `AS923`, `CN470`, and so on. It does **not** decide what the server
+enables. It is the fence: every sub-band in `SERVED_REGIONS` has to belong to
+it, so a typo that would leave gateways connected but deaf is caught before
+anything starts.
 
-`GATEWAY_BRIDGES` is one entry per gateway connection, `sub-band:port`. Each
-entry becomes its own gateway bridge with its own UDP port and MQTT topic
-prefix, so a site can serve an 8-channel sub-band and a 16-channel one at the
-same time:
+`SERVED_REGIONS` is one entry per sub-band this site serves, and it drives both
+what ChirpStack enables and what containers run. A region is enabled because
+something serves it — never merely because it belongs to `RF_REGION`.
+
+Each entry is `sub-band:how`, where `how` is either a UDP port or the word
+`forwarder`:
 
 ```bash
-GATEWAY_BRIDGES="us915_0:1700 us915_12:1701 us915_64ch:1702"
+SERVED_REGIONS="us915_0:1700 us915_12:1701 us915_1:forwarder"
 ```
 
+| `how` | What runs | When to use it |
+|---|---|---|
+| a port | a Gateway Bridge container listening on that UDP port | the gateway speaks the Semtech UDP packet-forwarder protocol — almost all of them, out of the box |
+| `forwarder` | nothing; the region is enabled and no container is created | the gateway runs ChirpStack's own MQTT Forwarder and publishes to the broker itself |
+
+A `forwarder` entry exists because such a site has no bridge at all, and would
+otherwise have no way to enable its region. Those gateways need an MQTT login
+of their own — `./sitesync mqtt add NAME gateway`.
+
 There is no limit on the number. `1700/udp` is the standard Semtech
-packet-forwarder port, so the first entry should normally use it.
+packet-forwarder port, so the first bridge entry should normally use it.
+
+Editing this by hand is rarely necessary:
+
+```bash
+./sitesync region list             # what is served, and how
+./sitesync region add              # asks which sub-band, and bridge or forwarder
+./sitesync region remove us915_12  # confirms first
+```
 
 `doctor` checks that every sub-band belongs to `RF_REGION`, that no two bridges
-share a port, and that the generated `chirpstack.toml` actually matches
-`RF_REGION` — a mismatch there means gateways connect and uplinks silently go
-nowhere, which is the failure this design exists to prevent.
+share a port, that each served region has its `region_*.toml` file, and that
+the generated `chirpstack.toml` actually matches `SERVED_REGIONS` — a mismatch
+there means gateways connect and uplinks silently go nowhere, which is the
+failure this design exists to prevent.
+
+> Sites built before 2026-09 used `GATEWAY_BRIDGES`, which held only the port
+> form. It is still read, and the first `./sitesync apply` rewrites it to
+> `SERVED_REGIONS`, leaving the old line commented out above it.
 
 **Two generated files** come out of this, both listed in `.gitignore`:
 `configuration/chirpstack/chirpstack.toml` (from `chirpstack.toml.template`,

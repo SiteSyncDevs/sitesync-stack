@@ -78,7 +78,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # Gateway bridges are NOT defined here. One is generated per entry in
-  # GATEWAY_BRIDGES (.env) into compose/gateways.yml, because compose cannot
+  # SERVED_REGIONS (.env) into compose/gateways.yml, because compose cannot
   # loop and a site may need several -- an 8-channel sub-band and a 16-channel
   # one side by side, each on its own UDP port and MQTT topic prefix.
   # COMPOSE_FILE in .env loads that second file alongside this one.
@@ -86,7 +86,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # REST / Swagger API. Reached through Caddy, so it is covered by TLS_MODE.
-  # Turn off by removing "rest-api" from COMPOSE_PROFILES in .env.
+  # Required on every SiteSync site, so "rest-api" is always in COMPOSE_PROFILES.
   # ---------------------------------------------------------------------------
   chirpstack-rest-api:
     image: chirpstack/chirpstack-rest-api:${REST_API_VERSION:-4}

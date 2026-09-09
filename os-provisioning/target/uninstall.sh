@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# uninstall-all.sh
+# uninstall.sh
 #
-# Undoes everything install-all.sh does, so a test VM can be re-run from a
+# Undoes everything install.sh does, so a test VM can be re-run from a
 # clean slate without rebuilding it. Run on the TARGET:
 #
-#     sudo bash uninstall-all.sh            # asks before doing anything
-#     sudo bash uninstall-all.sh --yes      # no prompt
-#     sudo bash uninstall-all.sh --dry-run  # print the plan, change nothing
+#     sudo bash uninstall.sh            # asks before doing anything
+#     sudo bash uninstall.sh --yes      # no prompt
+#     sudo bash uninstall.sh --dry-run  # print the plan, change nothing
 #
 # THIS IS A TEST-RESET TOOL. It destroys every container, image and named
 # volume on the machine, including the ChirpStack postgres and redis data.
@@ -118,7 +118,7 @@ skip() { printf '   [skip] %s\n' "$*"; }
 fail() { printf '\nFAILED: %s\n' "$*" >&2; exit 1; }
 run()  { if (( DRY )); then printf '   [dry ] %s\n' "$*"; else eval "$@"; fi; }
 
-[[ ${EUID:-$(id -u)} -eq 0 ]] || fail "must run as root:  sudo bash uninstall-all.sh"
+[[ ${EUID:-$(id -u)} -eq 0 ]] || fail "must run as root:  sudo bash uninstall.sh"
 
 DOCKER_PKGS=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin
              docker-compose-plugin docker-ce-rootless-extras)
@@ -494,7 +494,7 @@ while IFS= read -r leftover; do
 done < <(find / -xdev -maxdepth 6 \( -name .aptsource.list -o -name .aptlists \) 2>/dev/null || true)
 
 # ------------------------------------------------------- sitesync stack ------
-# install-all.sh writes these; without removing them a "clean" reinstall is not
+# install.sh writes these; without removing them a "clean" reinstall is not
 # clean. The state markers matter most: they make --resume skip steps that were
 # never actually run on this machine.
 if (( ! KEEP_DATA )); then
@@ -507,6 +507,27 @@ if (( ! KEEP_DATA )); then
 
   # The current path and every name this stack has been installed under before.
   for sd in "$STACK_DIR_TARGET" "${LEGACY_STACK_DIRS[@]+"${LEGACY_STACK_DIRS[@]}"}"; do
+    # Installed with --install-root, /opt/sitesync is a symlink onto the data
+    # drive. Deleting the link would leave the site's .env, certificates and
+    # database settings sitting there, and the next install would silently
+    # inherit them -- a "clean" reset that is nothing of the sort. Follow it,
+    # remove what it points at, then remove the link.
+    if [[ -L "$sd" ]]; then
+      link_target="$(readlink -f -- "$sd" 2>/dev/null || true)"
+      if [[ -n "$link_target" && -d "$link_target" ]]; then
+        run "rm -rf --one-file-system -- '$link_target'"
+        ok "removed $link_target (settings, certificates, MQTT users)"
+        while IFS= read -r old; do
+          [[ -n "$old" ]] || continue
+          run "rm -rf --one-file-system -- '$old'"; ok "removed $old"
+        done < <(find "$(dirname "$link_target")" -maxdepth 1 \
+                   -name "$(basename "$link_target").replaced-*" 2>/dev/null || true)
+      fi
+      run "rm -f -- '$sd'"
+      ok "removed the $sd symlink"
+      continue
+    fi
+
     if [[ -d "$sd" ]]; then
       # This holds the site's .env, certificates and MQTT users. Keeping it
       # would make the next install silently reuse the old settings and skip
@@ -541,6 +562,19 @@ if (( ! KEEP_DATA )); then
 fi
 
 # ---------------------------------------------------------------- group ------
+# The stack's own group, created by step 30 so that more than one admin can run
+# ./sitesync. It owns nothing once the stack directory is gone.
+if (( ! KEEP_GROUP && ! KEEP_DATA )) && getent group sitesync >/dev/null; then
+  say "Removing the sitesync group"
+  for m in $(getent group sitesync | cut -d: -f4 | tr ',' ' '); do
+    run "gpasswd -d '$m' sitesync >/dev/null 2>&1 || true"
+    ok "removed '$m' from the sitesync group"
+  done
+  run "groupdel sitesync 2>/dev/null || true"
+  getent group sitesync >/dev/null && warn "group 'sitesync' still exists (someone's primary group?)" \
+                                   || ok "group 'sitesync' removed"
+fi
+
 if (( ! KEEP_GROUP )) && getent group docker >/dev/null; then
   say "Removing the docker group"
   # gpasswd first: groupdel refuses while it is anyone's primary group, and
@@ -602,6 +636,6 @@ cat <<'NEXT'
      - your shell still has the old group membership. Log out and back in,
        or the next install's group check reads stale.
 
-   Ready for another 'sudo bash install-all.sh'.
+   Ready for another 'sudo bash install.sh'.
 NEXT
 fi

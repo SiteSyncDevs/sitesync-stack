@@ -525,7 +525,7 @@ fi
 if [[ -e "$LOCATION/lib/core/common" || -x "$LOCATION/ignition.sh" ]]; then
   fail "Ignition is already installed at $LOCATION.
         This script does not upgrade in place. Remove it first with
-        uninstall-all.sh, or install elsewhere with --location DIR."
+        uninstall.sh, or install elsewhere with --location DIR."
 fi
 
 chmod +x "$RUN"

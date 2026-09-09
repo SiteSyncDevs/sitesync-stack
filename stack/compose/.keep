@@ -1,1 +1,1 @@
-# ./sitesync apply generates gateways.yml here from GATEWAY_BRIDGES in .env.
+# ./sitesync apply generates gateways.yml here from SERVED_REGIONS in .env.

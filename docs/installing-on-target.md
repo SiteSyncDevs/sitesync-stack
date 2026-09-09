@@ -90,7 +90,7 @@ cat README.txt
 ## Step 3 — Run the installer
 
 ```bash
-sudo bash install-all.sh
+sudo bash install.sh
 ```
 
 That is the whole job. It runs seven steps in order and **stops at the first
@@ -122,7 +122,38 @@ Step 00 changes nothing. If it fails, the machine is exactly as you found it.
 
 ### It will ask you two things
 
-**During step 15 — where to install Ignition.**
+**At the very start — where everything should be installed.** You only see this
+if the machine has a second drive:
+
+```
+   This machine has a second drive:
+
+     /data                        458 GB free
+
+   Installing everything on /data:
+     stack      /data/sitesync   (also reachable as /opt/sitesync)
+     docker     /data/docker
+     ignition   /data/ignition
+
+   Answering no uses the OS disk instead:
+     /opt/sitesync, /var/lib/docker, /usr/local/bin/ignition
+
+   Install everything on /data? [Y/n]:
+```
+
+**Press Enter** if the drive was put there for this. That is the usual case —
+the OS disk on these machines is small, and the database, container images and
+Ignition all grow.
+
+`/opt/sitesync` keeps working either way: it becomes a symlink to the real
+location, so every command in this document is unchanged. It is a symlink, not
+a stray copy — leave it alone.
+
+If there is no second drive, nothing is asked and everything goes on the OS
+disk.
+
+**During step 15 — where to install Ignition.** You only see this if you did
+*not* answer the question above (no second drive, or you declined it):
 
 ```
    Where should Ignition be installed?
@@ -136,6 +167,23 @@ someone has specifically told you otherwise.
 
 **During step 40 — eight questions about the site.** These are covered in the
 next section.
+
+### Installing only some of it
+
+By default you get everything in the artifact. To install one piece — adding
+Ignition to a machine that already runs ChirpStack, say, or standing up Docker
+before a maintenance window:
+
+```bash
+sudo bash install.sh --only-ignition       # just the Ignition gateway
+sudo bash install.sh --only-docker         # just Docker Engine
+sudo bash install.sh --only-chirpstack     # images, stack and site questions
+sudo bash install.sh --no-ignition         # everything except Ignition
+```
+
+`--only-*` may be repeated (`--only-docker --only-chirpstack`). The installer
+prints a **Plan** before it starts, listing exactly what it will touch — read
+it before you answer anything.
 
 ---
 
@@ -249,7 +297,7 @@ was attempted.**
 Once you have fixed the cause, you do not start over. Run:
 
 ```bash
-sudo bash install-all.sh --resume
+sudo bash install.sh --resume
 ```
 
 That skips every step that already succeeded and picks up where it stopped.
@@ -257,7 +305,7 @@ That skips every step that already succeeded and picks up where it stopped.
 To force one specific step to run again, e.g. step 20:
 
 ```bash
-sudo bash install-all.sh --redo 20
+sudo bash install.sh --redo 20
 ```
 
 ### Every step-00 check, and what to do
@@ -270,7 +318,7 @@ untouched.
 | `this artifact was built for Ubuntu 'X' but this machine is 'Y'` | Wrong bundle for this server | Ask the office for a bundle built with `--codename Y`. The Docker packages genuinely will not work otherwise. |
 | `this machine is X but the artifact was built for Y` (architecture) | Wrong CPU architecture | Ask for a bundle built with `--arch X`. Nothing here will run. |
 | `these conflict with Docker Engine and must be removed first` | An old or different Docker is installed | Run the `apt-get remove` command it prints. For a snap: `sudo snap remove docker`. |
-| `Ignition is already installed on this machine` | A gateway is already here; this installer installs, it does not upgrade | Three choices, all printed on screen: remove it with `sudo bash uninstall-all.sh`, ask for a bundle built `--skip-ignition`, or install alongside with `--ignition-dir /opt/ignition-new`. |
+| `Ignition is already installed on this machine` | A gateway is already here; this installer installs, it does not upgrade | Three choices, all printed on screen: remove it with `sudo bash uninstall.sh`, ask for a bundle built `--skip-ignition`, or install alongside with `--ignition-dir /opt/ignition-new`. |
 | `only NNNN MB free on /var/lib` | Not enough disk | See *"Not enough disk space"* below. |
 | `<file> is named in AIRGAP_INFO but is not in this folder` | The copy is incomplete | Copy the whole folder over again. Do not copy files individually. |
 | `this machine is not running systemd` | Not a normal Ubuntu Server (a container, or WSL) | This needs a real VM or physical machine. Escalate. |
@@ -285,11 +333,13 @@ FAILED: only 6234 MB free on /var/lib, and the images need about 8192 MB.
 Three options, in order of preference:
 
 1. **Give the VM a bigger disk.** 40 GB is comfortable. This is the real fix.
-2. **Install onto a data drive**, if the machine has a second disk:
+2. **Install onto a data drive**, if the machine has a second disk. This puts
+   the stack, Docker's data and Ignition all on it:
    ```bash
-   sudo bash install-all.sh --data-root /mnt/data/docker
+   sudo bash install.sh --install-root /data
    ```
-   Or let it find one: `sudo bash install-all.sh --data-root auto`
+   The installer normally offers this on its own; you only need the flag if you
+   answered no, or if the drive was mounted after you started.
 3. **Free space.** If this machine has been used for testing before, the usual
    culprits are old install logs and Ignition backups that the uninstaller
    deliberately keeps:
@@ -303,7 +353,7 @@ Three options, in order of preference:
 
 | Message | Step | What to do |
 |---|---|---|
-| `must run as root: sudo bash install-all.sh` | — | You forgot `sudo`. Run it again with `sudo` in front. |
+| `must run as root: sudo bash install.sh` | — | You forgot `sudo`. Run it again with `sudo` in front. |
 | `AIRGAP_INFO missing - this folder is not a complete artifact` | — | You are in the wrong folder, or only part of it copied. `cd` into the unpacked folder; if it is incomplete, copy it again. |
 | `checksum mismatch - re-copy the whole folder` | — | The transfer corrupted something. Copy the whole `.tar` again and re-unpack. Do not try to fix individual files. |
 | `Docker Engine install failed` | 10 | Read the lines above it — this is `apt` talking. Send the log. |
@@ -324,7 +374,7 @@ On a **test machine only** — this destroys every container, image and volume o
 the box, including the ChirpStack database:
 
 ```bash
-sudo bash uninstall-all.sh
+sudo bash uninstall.sh
 ```
 
 It asks you to type `wipe` to confirm, and archives Ignition's data to
@@ -333,7 +383,7 @@ It asks you to type `wipe` to confirm, and archives Ignition's data to
 Preview what it would do without changing anything:
 
 ```bash
-sudo bash uninstall-all.sh --dry-run
+sudo bash uninstall.sh --dry-run
 ```
 
 ---

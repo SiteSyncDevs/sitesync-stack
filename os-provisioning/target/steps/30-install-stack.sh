@@ -34,7 +34,7 @@ if [[ "$DEST" != "$LEGACY_DEST" && -d "$LEGACY_DEST" ]]; then
     warn "it holds a configured site (.env, certificates, MQTT users)."
     warn "To carry that site over to $DEST instead of starting fresh, stop here"
     warn "and run:"
-    warn "    sudo bash install-all.sh --install-dir $LEGACY_DEST"
+    warn "    sudo bash install.sh --install-dir $LEGACY_DEST"
     warn "or move it first:"
     warn "    cd /opt && sudo systemctl stop 'sitesync-chirpstack-*' 2>/dev/null; sudo mv $LEGACY_DEST $DEST"
   else
@@ -74,20 +74,61 @@ else
   ok "installed"
 fi
 
-# The files must be usable by the person who ran sudo, not only by root.
+# --- who may use it ----------------------------------------------------------
+# A site outlives the tech who installed it. Owning the tree by one person's
+# account means the next admin cannot read .env without sudo, and cannot be
+# given access without a recursive chown. A group can: add someone to it and
+# they are in.
+#
+# root owns the files, the group carries the access, and the setgid bit on the
+# directories makes anything created later inherit the group -- backups and
+# generated config included.
+SS_GROUP=sitesync
+if ! getent group "$SS_GROUP" >/dev/null 2>&1; then
+  groupadd --system "$SS_GROUP" && ok "created the '$SS_GROUP' group"
+fi
+
+chown -R "root:$SS_GROUP" "$DEST"
+find "$DEST" -type d -exec chmod 2775 {} + 2>/dev/null || true
+find "$DEST" -type f -exec chmod g+r {} + 2>/dev/null || true
+ok "owned by root:$SS_GROUP, readable and writable by that group"
+
+# The two files holding secrets stay off-limits to everyone else.
+if [[ -f "$DEST/.env" ]]; then chmod 640 "$DEST/.env"; fi
+if [[ -f "$DEST/configuration/mosquitto/config/passwd" ]]; then
+  # uid 1883 is the broker's own user; it must keep read access or mosquitto
+  # restarts forever. The group is what lets the operator read it too.
+  chown 1883:"$SS_GROUP" "$DEST/configuration/mosquitto/config/passwd" 2>/dev/null || true
+  chmod 640 "$DEST/configuration/mosquitto/config/passwd"
+fi
+
 OWNER="${SUDO_USER:-root}"
 if [[ "$OWNER" != root ]] && id "$OWNER" >/dev/null 2>&1; then
-  chown -R "$OWNER":"$(id -gn "$OWNER")" "$DEST"
-  ok "owned by $OWNER"
-  # So they can run ./sitesync without sudo -- takes effect at next login.
-  if ! id -nG "$OWNER" | tr ' ' '\n' | grep -qx docker; then
-    usermod -aG docker "$OWNER" && ok "added $OWNER to the docker group (needs a re-login)"
-  fi
+  for g in "$SS_GROUP" docker; do
+    if ! id -nG "$OWNER" | tr ' ' '\n' | grep -qx "$g"; then
+      usermod -aG "$g" "$OWNER" && ok "added $OWNER to the $g group (needs a re-login)"
+    fi
+  done
+  echo "   To let someone else run ./sitesync:  sudo usermod -aG $SS_GROUP,docker THEIR_NAME"
 fi
 
 chmod +x "$DEST/sitesync" "$DEST/setup.sh" 2>/dev/null || true
 chmod +x "$DEST"/scripts/*.sh "$DEST"/os-provisioning/*.sh 2>/dev/null || true
-[[ -f "$DEST/.env" ]] && chmod 600 "$DEST/.env"
+
+# --- the canonical path ------------------------------------------------------
+# Every runbook, log line and error message says /opt/sitesync. When the stack
+# actually lives on a data drive, a symlink keeps all of that true.
+if [[ "$DEST" != /opt/sitesync ]]; then
+  if [[ -e /opt/sitesync && ! -L /opt/sitesync ]]; then
+    warn "/opt/sitesync exists and is a real directory, so it was left alone."
+    warn "the stack is at $DEST -- mind which one you edit."
+  else
+    mkdir -p /opt
+    ln -sfn "$DEST" /opt/sitesync
+    ok "/opt/sitesync -> $DEST"
+    echo "   That is a symlink, not a stray copy. cd /opt/sitesync works as always."
+  fi
+fi
 
 # Prove the snapshot is complete rather than discovering it at first start.
 for required in docker-compose.yml sitesync setup.sh .env.example \

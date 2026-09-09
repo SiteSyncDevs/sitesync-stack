@@ -10,6 +10,10 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 HERE="$PWD"
 
+# Region vocabulary and the SERVED_REGIONS parser, shared with render.sh and
+# doctor.sh so the three can never disagree about what a region is.
+. scripts/lib-regions.sh
+
 bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
 ok()    { printf '  \033[32mOK\033[0m    %s\n' "$*"; }
 warn()  { printf '  \033[33mCHECK\033[0m %s\n' "$*"; }
@@ -57,6 +61,11 @@ cmd_help() {
     ./sitesync start         Start the site.
     ./sitesync stop          Stop the site. Data is kept.
     ./sitesync restart       Stop then start.
+
+  RADIO REGIONS  (which sub-bands this site serves)
+    ./sitesync region list           What is served, and how gateways reach us.
+    ./sitesync region add            Serve another sub-band. Asks what it needs.
+    ./sitesync region remove NAME    Stop serving one. Asks first.
 
   LOOKING AFTER IT
     ./sitesync backup        Save the database and settings into backups/
@@ -174,16 +183,20 @@ cmd_status() {
     info "REST API:       $s://${SITE_DOMAIN:-localhost}:$p" ;;
   esac
   echo
-  if [[ -n "${GATEWAY_BRIDGES:-}" ]]; then
-    info "Gateways connect to ${SITE_DOMAIN:-this host} on:"
-    local e sub port
-    for e in ${GATEWAY_BRIDGES}; do
-      sub="${e%%:*}"; port="${e##*:}"
-      info "  $(printf '%-11s' "$sub") UDP port $port"
+  served_load
+  if [[ -n "$SERVED_VALUE" ]] && served_parse "$SERVED_VALUE" SERVED_REGIONS; then
+    info "Regions served:"
+    local id
+    for id in "${SERVED_IDS[@]}"; do
+      if [[ "${SERVED_HOW[$id]}" == forwarder ]]; then
+        info "  $(printf '%-11s' "$id") gateways publish over MQTT themselves"
+      else
+        info "  $(printf '%-11s' "$id") UDP port ${SERVED_HOW[$id]} on ${SITE_DOMAIN:-this host}"
+      fi
     done
   else
-    info "No gateway bridges are configured, so no gateway can connect."
-    info "Set GATEWAY_BRIDGES in .env and run ./sitesync apply"
+    info "No regions are served, so no gateway can connect."
+    info "Add one with:  ./sitesync region add"
   fi
 }
 
@@ -209,7 +222,7 @@ cmd_mqtt_info() {
   else
     info "  Login         not required"
   fi
-  info "  Topic prefix  one per sub-band -- see GATEWAY_BRIDGES in .env"
+  info "  Topic prefix  one per sub-band -- see SERVED_REGIONS in .env"
   echo
   warn "This output contains a password. Do not paste it into a ticket or chat."
 }
@@ -224,6 +237,184 @@ cmd_ca() {
   info "Install this file on any computer that should not see the browser warning:"
   info "  Windows  double-click, Install Certificate, Local Machine, Trusted Root Certification Authorities"
   info "  macOS    double-click, then set it to Always Trust in Keychain Access"
+}
+
+# -----------------------------------------------------------------------------
+# Regions. Adding one is the single most common change to a live site -- a
+# customer buys gateways on a second sub-band -- and doing it by hand means
+# editing .env, knowing the sub-band spelling, and picking a free port. This
+# does all three, then applies.
+
+# Rewrite SERVED_REGIONS in .env, keeping every comment around it.
+set_served() {  # set_served "<value>"
+  awk -v v="$1" '
+    index($0, "SERVED_REGIONS=") == 1 { print "SERVED_REGIONS=\"" v "\""; found=1; next }
+    { print }
+    END { if (!found) print "SERVED_REGIONS=\"" v "\"" }
+  ' .env > .env.tmp && mv .env.tmp .env
+  chmod 600 .env 2>/dev/null || true
+}
+
+# The current list as a flat string, in list order.
+served_string() {
+  local id out=""
+  for id in "${SERVED_IDS[@]+"${SERVED_IDS[@]}"}"; do
+    out+="${out:+ }$id:${SERVED_HOW[$id]}"
+  done
+  printf '%s' "$out"
+}
+
+# Load and parse, dying with the parser's own wording if .env is malformed.
+load_served() {
+  served_load
+  served_parse "$SERVED_VALUE" SERVED_REGIONS || die "$SERVED_ERROR"
+}
+
+cmd_region_list() {
+  require_env; load_served
+  bold "Regions served by ${SITE_LABEL:-this site}  (${RF_REGION:-?})"
+  echo
+  if (( ${#SERVED_IDS[@]} == 0 )); then
+    info "  none -- no gateway can connect. Add one with:  ./sitesync region add"
+    return 0
+  fi
+  local id
+  for id in "${SERVED_IDS[@]}"; do
+    if [[ "${SERVED_HOW[$id]}" == forwarder ]]; then
+      printf '  %-11s  %-18s %s\n' "$id" "MQTT Forwarder" "$(region_description "$id")"
+    else
+      printf '  %-11s  %-18s %s\n' "$id" "UDP ${SERVED_HOW[$id]}" "$(region_description "$id")"
+    fi
+  done
+  echo
+  local avail=() i
+  mapfile -t i < <(region_ids_for "${RF_REGION:-}")
+  for id in "${i[@]+"${i[@]}"}"; do
+    [[ -n "${SERVED_HOW[$id]:-}" ]] || avail+=("$id")
+  done
+  if (( ${#avail[@]} )); then
+    info "Also available in ${RF_REGION}: ${avail[*]}"
+    info "Add one with:  ./sitesync region add"
+  fi
+}
+
+cmd_region_add() {
+  require_env; load_served
+  local sub="${1:-}" how="${2:-}" i avail=() id
+
+  mapfile -t i < <(region_ids_for "${RF_REGION:-}")
+  (( ${#i[@]} )) || die "RF_REGION is '${RF_REGION:-}', which this stack does not know."
+  for id in "${i[@]}"; do
+    [[ -n "${SERVED_HOW[$id]:-}" ]] || avail+=("$id")
+  done
+
+  if [[ -z "$sub" ]]; then
+    (( ${#avail[@]} )) || die "Every sub-band of $RF_REGION is already served. Nothing to add."
+    bold "Add a region to ${SITE_LABEL:-this site}"
+    echo
+    info "Sub-bands of $RF_REGION not yet served:"
+    for id in "${avail[@]}"; do
+      printf '  %-11s %s\n' "$id" "$(region_description "$id")"
+    done
+    echo
+    read -r -p "Which sub-band [${avail[0]}]: " sub </dev/tty \
+      || die "This needs a terminal. Pass the sub-band as an argument instead."
+    sub="${sub:-${avail[0]}}"
+  fi
+
+  # Validate before asking anything else, so a typo costs one question.
+  [[ -z "${SERVED_HOW[$sub]:-}" ]] || die "$sub is already served (${SERVED_HOW[$sub]}).
+To change how, remove it first:  ./sitesync region remove $sub"
+  local rf; rf="$(rf_of_region_id "$sub")"
+  [[ -n "$rf" ]] || die "'$sub' is not a frequency plan this stack knows about.
+Available in $RF_REGION: ${avail[*]}"
+  [[ "$rf" == "$RF_REGION" ]] || die "'$sub' belongs to $rf, but this site runs $RF_REGION.
+Gateways on that plan would connect and their uplinks would go nowhere."
+
+  if [[ -z "$how" ]]; then
+    local suggested; suggested="$(served_next_port)"
+    echo
+    info "How will gateways on $sub reach this site?"
+    info "  1) a gateway bridge here -- the gateway sends Semtech UDP at us  (usual)"
+    info "  2) the gateway runs ChirpStack's MQTT Forwarder and publishes itself"
+    echo
+    local pick; read -r -p "Choose [1]: " pick </dev/tty || pick=1
+    if [[ "${pick:-1}" == 2 ]]; then
+      how=forwarder
+    else
+      read -r -p "  UDP port [$suggested]: " how </dev/tty || how="$suggested"
+      how="${how:-$suggested}"
+    fi
+  fi
+
+  local new; new="$(served_string)"
+  new="${new:+$new }$sub:$how"
+  # Parse the whole prospective list rather than trusting the new entry alone:
+  # that is what catches a port already taken by another bridge.
+  served_parse "$new" SERVED_REGIONS || die "$SERVED_ERROR"
+
+  set_served "$new"
+  echo
+  if [[ "$how" == forwarder ]]; then
+    ok "added $sub, served by the gateway's own MQTT Forwarder"
+    info "Those gateways need an MQTT login. Create one with:"
+    info "    ./sitesync mqtt add <name> gateway"
+    info "and point the forwarder's topic prefix at:  $sub"
+  else
+    ok "added $sub on UDP port $how"
+    info "Point the gateways' packet forwarder at ${SITE_DOMAIN:-this host}:$how"
+  fi
+  echo
+  cmd_apply
+}
+
+cmd_region_remove() {
+  require_env; load_served
+  local sub="${1:-}"
+  [[ -n "$sub" ]] || die "Which one? Run  ./sitesync region list  to see them."
+  [[ -n "${SERVED_HOW[$sub]:-}" ]] || die "$sub is not in SERVED_REGIONS. Nothing to remove."
+
+  if (( ${#SERVED_IDS[@]} == 1 )); then
+    warn "$sub is the only region this site serves."
+    info "  Removing it leaves the site running but unable to accept any gateway,"
+    info "  and ./sitesync apply will refuse until you add one back."
+  else
+    warn "Gateways transmitting on $sub will stop reaching this site."
+  fi
+  if [[ "${SERVED_HOW[$sub]}" != forwarder ]]; then
+    info "  The bridge container on UDP ${SERVED_HOW[$sub]} is removed."
+  fi
+  info "  Devices, applications and past data are NOT touched."
+  echo
+  local reply
+  read -r -p "Remove $sub? [y/N]: " reply </dev/tty \
+    || die "This needs a terminal to confirm on."
+  [[ "${reply,,}" == y* ]] || { info "Left alone."; return 0; }
+
+  local id new=""
+  for id in "${SERVED_IDS[@]}"; do
+    [[ "$id" == "$sub" ]] && continue
+    new+="${new:+ }$id:${SERVED_HOW[$id]}"
+  done
+  set_served "$new"
+  ok "removed $sub"
+  echo
+  if [[ -z "$new" ]]; then
+    warn "SERVED_REGIONS is now empty, so apply would refuse to run."
+    info "Add a region before starting the site:  ./sitesync region add"
+    return 0
+  fi
+  cmd_apply
+}
+
+cmd_region() {
+  case "${1:-list}" in
+    list|ls|"")      shift || true; cmd_region_list ;;
+    add|new)         shift; cmd_region_add "$@" ;;
+    remove|rm|del)   shift; cmd_region_remove "$@" ;;
+    *) die "Unknown: ./sitesync region $1
+Try:  ./sitesync region list | add | remove" ;;
+  esac
 }
 
 cmd_backup()  { require_docker; require_env; bash scripts/backup.sh; }
@@ -248,6 +439,7 @@ case "${1:-help}" in
   restore)        shift; cmd_restore "$@" ;;
   update)         cmd_update ;;
   pin)            cmd_pin ;;
+  region|regions) shift || true; cmd_region "$@" ;;
   mqtt)           shift; cmd_mqtt "$@" ;;
   mqtt-info)      cmd_mqtt_info ;;
   ca)             cmd_ca ;;

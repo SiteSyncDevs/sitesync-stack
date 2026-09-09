@@ -37,6 +37,9 @@ LOCATION="${AIRGAP_IGNITION_DIR:-}"
 
 if [[ -z "$LOCATION" ]]; then
   if [[ -r /dev/tty ]]; then
+    # Only ask when nothing has already answered. With --install-root the tech
+    # was asked once, up front, and asking again here would look like the
+    # first answer had not registered.
     echo
     echo "   Where should Ignition be installed?"
     echo "   Press Enter for the default, or type a full path."

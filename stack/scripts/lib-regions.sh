@@ -51,3 +51,142 @@ region_description() {  # region_description us915_12
 }
 
 region_id_exists() { [[ -n "$(rf_of_region_id "$1")" ]]; }
+
+# ----------------------------------------------------------- SERVED_REGIONS --
+# The sub-bands this site serves, and how each one reaches the server:
+#
+#     us915_0:1700        a gateway bridge container, listening on UDP 1700
+#     us915_1:forwarder   no container -- the gateway runs ChirpStack's own
+#                         MQTT Forwarder and publishes to the broker directly
+#
+# Both kinds enable their region in chirpstack.toml. That is the whole point of
+# the list: a region is enabled because something is actually serving it, never
+# because it happens to belong to RF_REGION. A forwarder site would otherwise
+# have no way to enable a region at all, since it runs no bridge.
+#
+# Until 2026-09 this was GATEWAY_BRIDGES and held only the port form.
+
+# Declared here so that sourcing this file is enough to make them safe to read
+# under `set -u`, whether or not served_load has run yet.
+SERVED_VALUE=""
+SERVED_FROM_LEGACY=0
+
+# Read the list out of the environment into SERVED_VALUE, falling back to the
+# legacy variable and setting SERVED_FROM_LEGACY=1 when it does, so callers can
+# offer to migrate.
+#
+# This sets globals rather than printing, deliberately: a caller writing
+# v="$(served_value)" would run it in a subshell and the legacy flag would be
+# thrown away with that subshell, leaving the caller reading a stale 0 -- or,
+# under `set -u`, aborting on an unset variable.
+served_load() {
+  SERVED_FROM_LEGACY=0
+  SERVED_VALUE="${SERVED_REGIONS:-}"
+  if [[ -z "$SERVED_VALUE" && -n "${GATEWAY_BRIDGES:-}" ]]; then
+    SERVED_VALUE="$GATEWAY_BRIDGES"
+    SERVED_FROM_LEGACY=1
+  fi
+}
+
+SERVED_ERROR=""
+_served_fail() { SERVED_ERROR="$1"; }
+
+# Parse and validate. On success sets:
+#   SERVED_IDS[]      region ids, in the order given
+#   SERVED_HOW[id]    the UDP port, or the word "forwarder"
+#   SERVED_BRIDGES    how many of them are bridge containers
+# On the first bad entry it returns 1 and leaves the reason in SERVED_ERROR.
+# Every caller reports the same wording for the same mistake because they all
+# land here.
+#
+# The reason goes in a variable rather than to stderr so that a caller can
+# format it -- doctor.sh indents it under a heading, sitesync dies with it. A
+# caller doing why="$(served_parse ...)" to capture stderr would run the whole
+# parse in a subshell and get empty SERVED_IDS back, which is a bug that looks
+# exactly like a correctly-parsed empty list. Call it directly; read the two
+# globals after.
+served_parse() {  # served_parse <value> [<variable name to blame>]
+  local value="$1" var="${2:-SERVED_REGIONS}" entry id how rf
+  local -a ids=()
+  declare -gA SERVED_HOW=()
+  declare -ga SERVED_IDS=()
+  SERVED_BRIDGES=0
+  local -A seen_port=()
+  SERVED_ERROR=""
+
+  for entry in $value; do
+    [[ -n "$entry" ]] || continue
+    id="${entry%%:*}"
+    how="${entry##*:}"
+
+    if [[ "$id" == "$entry" || -z "$how" ]]; then
+      _served_fail "$var entry '$entry' is malformed. Use sub-band:port or sub-band:forwarder,
+for example  us915_0:1700  or  us915_0:forwarder"
+      return 1
+    fi
+    if [[ -n "${SERVED_HOW[$id]:-}" ]]; then
+      _served_fail "$var names '$id' twice. Each sub-band belongs in the list once."
+      return 1
+    fi
+    rf="$(rf_of_region_id "$id")"
+    if [[ -z "$rf" ]]; then
+      _served_fail "$var names sub-band '$id', which is not a frequency plan this stack knows about."
+      return 1
+    fi
+    if [[ -n "${RF_REGION:-}" && "$rf" != "$RF_REGION" ]]; then
+      _served_fail "$var names sub-band '$id', which belongs to $rf, not $RF_REGION.
+Gateways on that plan would connect and their uplinks would go nowhere."
+      return 1
+    fi
+
+    if [[ "$how" == forwarder ]]; then
+      : # nothing to bind; the gateway publishes to MQTT itself
+    elif [[ "$how" =~ ^[0-9]+$ ]]; then
+      if (( how < 1 || how > 65535 )); then
+        _served_fail "$var: '$how' is not a usable port number (entry '$entry')."
+        return 1
+      fi
+      if [[ -n "${seen_port[$how]:-}" ]]; then
+        _served_fail "$var uses port $how for both ${seen_port[$how]} and $id.
+Each gateway bridge needs its own port."
+        return 1
+      fi
+      seen_port[$how]="$id"
+      SERVED_BRIDGES=$(( SERVED_BRIDGES + 1 ))
+    else
+      _served_fail "$var entry '$entry': '$how' is neither a port number nor the word 'forwarder'."
+      return 1
+    fi
+
+    SERVED_HOW[$id]="$how"
+    ids+=("$id")
+  done
+
+  SERVED_IDS=("${ids[@]+"${ids[@]}"}")
+  return 0
+}
+
+# "us915_0 on UDP 1700, us915_1 via MQTT Forwarder" -- for status and doctor.
+served_describe() {
+  local id out=""
+  for id in "${SERVED_IDS[@]+"${SERVED_IDS[@]}"}"; do
+    if [[ "${SERVED_HOW[$id]}" == forwarder ]]; then
+      out+="${out:+, }$id via MQTT Forwarder"
+    else
+      out+="${out:+, }$id on UDP ${SERVED_HOW[$id]}"
+    fi
+  done
+  printf '%s' "$out"
+}
+
+# The lowest UDP port not already taken by a bridge, for suggesting a default.
+served_next_port() {
+  local id port=1700 taken=1
+  while (( taken )); do
+    taken=0
+    for id in "${SERVED_IDS[@]+"${SERVED_IDS[@]}"}"; do
+      [[ "${SERVED_HOW[$id]}" == "$port" ]] && { taken=1; port=$(( port + 1 )); break; }
+    done
+  done
+  printf '%s' "$port"
+}

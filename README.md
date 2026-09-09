@@ -38,7 +38,7 @@ path answers it.
   error the installer can produce. The short version, on the target:
 
   ```bash
-  sudo bash install-all.sh
+  sudo bash install.sh
   ```
 
 - **Operating or configuring a site afterwards** →

@@ -37,6 +37,20 @@ $( [[ -n "${IGNITION_SERVICE_UNIT:-}" ]] \
 TXT
 fi
 
+# With --only-ignition there is no stack to report on, and pointing the tech at
+# a setup.sh that was never installed would send them somewhere that does not
+# exist. The Ignition summary above is the whole result in that case.
+if [[ "${AIRGAP_DO_CHIRPSTACK:-1}" != 1 ]]; then
+  cat <<TXT
+
+   ChirpStack was not part of this install, so there is nothing else to check.
+   To add it later, from the same artifact folder:
+       sudo bash install.sh --only-chirpstack
+
+TXT
+  exit 0
+fi
+
 if [[ ! -f "$DEST/.env" ]]; then
   cat <<TXT
 

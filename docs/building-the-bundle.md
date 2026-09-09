@@ -81,7 +81,7 @@ That single command produces everything a bare Ubuntu 24.04 server needs:
 | `chirpstack-images-*.tar.gz` | Every container image the compose file references, all profiles |
 | `stack.tar.gz` | A snapshot of `stack/` — compose file, `configuration/`, `sitesync`, `setup.sh` |
 | `ignition-*-linux-64.tar.gz` | The vendor Ignition `.run`, checksum-verified |
-| `install-all.sh` + `steps/` | The installer, copied verbatim from `os-provisioning/target/` |
+| `install.sh` + `steps/` | The installer, copied verbatim from `os-provisioning/target/` |
 | `AIRGAP_INFO`, `VERSIONS.txt`, `SHA256SUMS`, `README.txt` | What is inside and how to prove it arrived intact |
 
 `--latest` also reads the real version out of each pulled image and stamps it
@@ -168,7 +168,7 @@ Tell the person on site:
 ```bash
 tar xf airgap-noble-cs4.11.0-20260908.tar
 cd airgap-noble-cs4.11.0-20260908
-sudo bash install-all.sh
+sudo bash install.sh
 ```
 
 and point them at [`installing-on-target.md`](installing-on-target.md).

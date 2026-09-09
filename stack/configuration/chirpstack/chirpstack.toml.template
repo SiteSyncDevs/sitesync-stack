@@ -34,13 +34,14 @@
   # LoRaWAN network identifier. 000000 is correct for a private network.
   net_id="$NET_ID"
 
-  # Every frequency plan belonging to RF_REGION in .env is enabled here. For
-  # US915 that is all sixteen: the eight 8-channel sub-bands, the seven
-  # 16-channel pairs, and the 64-channel plan. Enabling a plan costs nothing
-  # until a gateway actually uses its topic prefix, and having them all on
-  # means a gateway can be moved between sub-bands without touching the server.
+  # The frequency plans this site serves, one per entry in SERVED_REGIONS in
+  # .env -- whether that entry runs a gateway bridge here or the gateway runs
+  # ChirpStack's MQTT Forwarder itself. A plan is enabled because something is
+  # actually serving it, not because it belongs to RF_REGION.
   #
-  # Generated from RF_REGION -- do not edit by hand.
+  # To serve another sub-band:  ./sitesync region add
+  #
+  # Generated from SERVED_REGIONS -- do not edit by hand.
   enabled_regions=[__ENABLED_REGIONS__]
 
 

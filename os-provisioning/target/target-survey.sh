@@ -269,7 +269,7 @@ Two details that matter:
     starting on the OS drive by mistake.
 
 Then install with:
-    sudo bash install-all.sh --data-root /mnt/data/docker
+    sudo bash install.sh --data-root /mnt/data/docker
 SETUP
 fi
 

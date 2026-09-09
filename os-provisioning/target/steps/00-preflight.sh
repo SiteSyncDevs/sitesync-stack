@@ -9,6 +9,12 @@ fail() { printf '\nFAILED: %s\n' "$*" >&2; exit 1; }
 
 banner "Step 00: checking this machine before changing anything"
 
+# What was actually selected. Unset means a full install, which is what a
+# direct run of this step (outside install.sh) should assume.
+DO_DOCKER="${AIRGAP_DO_DOCKER:-1}"
+DO_CHIRPSTACK="${AIRGAP_DO_CHIRPSTACK:-1}"
+DO_IGNITION="${AIRGAP_DO_IGNITION:-1}"
+
 # --- operating system --------------------------------------------------------
 . /etc/os-release 2>/dev/null || fail "cannot read /etc/os-release - is this Ubuntu?"
 HOST_CODENAME="${VERSION_CODENAME:-unknown}"
@@ -21,7 +27,7 @@ if [[ -n "${AIRGAP_CODENAME:-}" && "$HOST_CODENAME" != "$AIRGAP_CODENAME" ]]; th
     fail "this artifact was built for Ubuntu '$AIRGAP_CODENAME' but this machine is '$HOST_CODENAME'.
         The Docker packages will not match. Build an artifact for this release with:
             ./prepare-airgap.sh --latest --codename $HOST_CODENAME
-        To override anyway:  sudo FORCE=1 bash install-all.sh"
+        To override anyway:  sudo FORCE=1 bash install.sh"
   fi
 else
   ok "Ubuntu $HOST_CODENAME"
@@ -36,6 +42,9 @@ else
 fi
 
 # --- conflicting packages ----------------------------------------------------
+# Only when Docker Engine is actually going on. An --only-ignition run has no
+# business refusing to proceed because the machine has podman on it.
+if (( DO_DOCKER )); then
 CONFLICTS=()
 for p in docker.io docker-doc docker-compose podman-docker containerd runc; do
   dpkg -l "$p" 2>/dev/null | grep -q '^ii' && CONFLICTS+=("$p")
@@ -51,11 +60,12 @@ if (( ${#CONFLICTS[@]} )); then
         (a docker snap is removed with: sudo snap remove docker)"
 fi
 ok "no conflicting container packages"
+fi
 
 # --- an Ignition gateway already here ----------------------------------------
 # Step 15 installs, it does not upgrade. Finding an existing gateway now is a
 # conversation; finding it after Docker is installed is a half-provisioned box.
-if [[ -n "${AIRGAP_IGNITION_TARBALL:-}" ]]; then
+if [[ -n "${AIRGAP_IGNITION_TARBALL:-}" ]] && (( DO_IGNITION )); then
   EXISTING=()
   for d in /usr/local/bin/ignition /usr/local/ignition /opt/ignition; do
     [[ -x "$d/ignition.sh" ]] && EXISTING+=("$d")
@@ -76,11 +86,11 @@ if [[ -n "${AIRGAP_IGNITION_TARBALL:-}" ]]; then
             ${EXISTING[*]}
         This installer installs, it does not upgrade in place. Either remove
         the existing gateway first:
-            sudo bash uninstall-all.sh
+            sudo bash uninstall.sh
         or build an artifact without it:
             ./prepare-airgap.sh --latest --skip-ignition
         To install alongside it anyway, into a different directory:
-            sudo bash install-all.sh --ignition-dir /opt/ignition-new"
+            sudo bash install.sh --ignition-dir /opt/ignition-new"
     fi
   else
     ok "no existing Ignition install"
@@ -90,15 +100,28 @@ fi
 # --- disk space --------------------------------------------------------------
 # Ignition is installed unpacked on the filesystem rather than as images under
 # /var/lib, so it is real extra space on top of what the containers need.
-need_mb=4096
-[[ -n "${AIRGAP_IGNITION_TARBALL:-}" ]] && need_mb=$((need_mb + 4096))
-free_mb=$(df -Pm /var/lib 2>/dev/null | awk 'NR==2{print $4}')
-if [[ -n "${free_mb:-}" ]] && (( free_mb < need_mb )); then
-  fail "only ${free_mb} MB free on /var/lib, and the images need about ${need_mb} MB.
-        Free some space, or install onto a data drive:
-            sudo bash install-all.sh --data-root /mnt/data/docker"
+need_mb=0
+if (( DO_CHIRPSTACK )); then need_mb=$((need_mb + 4096)); fi
+if (( DO_IGNITION )) && [[ -n "${AIRGAP_IGNITION_TARBALL:-}" ]]; then
+  need_mb=$((need_mb + 4096))
 fi
-ok "disk space: ${free_mb:-unknown} MB free on /var/lib"
+# Check the filesystem this install will actually land on. With --install-root
+# that is the chosen drive, and checking /var/lib instead would fail a perfectly
+# good install on a box with a small OS disk and a large data drive.
+SPACE_PATH=/var/lib
+if [[ -n "${AIRGAP_INSTALL_ROOT:-}" ]]; then
+  SPACE_PATH="${AIRGAP_INSTALL_ROOT}"
+  while [[ ! -d "$SPACE_PATH" && "$SPACE_PATH" != / ]]; do
+    SPACE_PATH="$(dirname "$SPACE_PATH")"
+  done
+fi
+free_mb=$(df -Pm "$SPACE_PATH" 2>/dev/null | awk 'NR==2{print $4}')
+if [[ -n "${free_mb:-}" ]] && (( free_mb < need_mb )); then
+  fail "only ${free_mb} MB free on $SPACE_PATH, and this install needs about ${need_mb} MB.
+        Free some space, or install onto a data drive:
+            sudo bash install.sh --install-root /data"
+fi
+ok "disk space: ${free_mb:-unknown} MB free on $SPACE_PATH"
 
 # --- the payload is actually here -------------------------------------------
 for var in AIRGAP_DOCKER_TARBALL AIRGAP_IMAGE_TARBALL AIRGAP_STACK_TARBALL AIRGAP_IGNITION_TARBALL; do
@@ -111,12 +134,15 @@ ok "every archive named in AIRGAP_INFO is present"
 
 # --- ports we are about to want ---------------------------------------------
 if command -v ss >/dev/null 2>&1; then
-  WANT_PORTS=(80 443 1883)
+  WANT_PORTS=()
+  if (( DO_CHIRPSTACK )); then WANT_PORTS+=(80 443 1883); fi
   # Ignition's gateway (8088) and its TLS port (8043). Unlike ChirpStack's,
   # these are not something setup.sh can move later, so a clash here matters
   # more -- but it is still a warning: the tech may be about to stop whatever
   # is holding the port.
-  [[ -n "${AIRGAP_IGNITION_TARBALL:-}" ]] && WANT_PORTS+=(8088 8043)
+  if (( DO_IGNITION )) && [[ -n "${AIRGAP_IGNITION_TARBALL:-}" ]]; then
+    WANT_PORTS+=(8088 8043)
+  fi
   BUSY=()
   for p in "${WANT_PORTS[@]}"; do
     ss -ltnH "sport = :$p" 2>/dev/null | grep -q . && BUSY+=("$p")

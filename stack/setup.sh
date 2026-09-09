@@ -53,6 +53,25 @@ hand_back_ownership() {
   local u="${SUDO_USER:-}" g
   [[ -n "$u" && "$u" != root ]] || return 0
   id "$u" >/dev/null 2>&1 || return 0
+
+  # An installed stack is owned root:sitesync so that any admin in that group
+  # can use it. Where that group exists, keep the model: fix the group and the
+  # bits, and leave root owning the files. Chowning everything to one person
+  # here would undo it and lock the next admin out.
+  if getent group sitesync >/dev/null 2>&1; then
+    chgrp -R sitesync . 2>/dev/null || true
+    find . -type d -exec chmod 2775 {} + 2>/dev/null || true
+    find . -path ./configuration/mosquitto/config/passwd -prune -o -type f -exec chmod g+r {} + 2>/dev/null || true
+    [[ -f .env ]] && chmod 640 .env 2>/dev/null
+    if [[ -f configuration/mosquitto/config/passwd ]]; then
+      chown 1883:sitesync configuration/mosquitto/config/passwd 2>/dev/null || true
+      chmod 640 configuration/mosquitto/config/passwd 2>/dev/null || true
+    fi
+    return 0
+  fi
+
+  # No group -- this is a copy run straight from a tarball rather than an
+  # installed one. Fall back to handing it to the person who ran sudo.
   g="$(id -gn "$u" 2>/dev/null)" || return 0
   # The MQTT password file is the one exception: it must stay owned by uid 1883,
   # the user the broker drops to, or mosquitto cannot read it and restarts
@@ -127,8 +146,9 @@ rf_regions | while IFS=$'\t' read -r rf n; do
   fi
 done
 p ""
-p "All of the chosen region's frequency plans are enabled on the server, so a"
-p "gateway can be moved between sub-bands later without touching the server."
+p "The next question asks which of its sub-bands this site actually serves;"
+p "only those are enabled on the server. You can add more later at any time"
+p "with  ./sitesync region add"
 p ""
 while :; do
   RF_REGION="$(ask 'Radio region' 'US915')"
@@ -142,18 +162,49 @@ mapfile -t SUBBANDS < <(region_ids_for "$RF_REGION")
 p ""
 p "$RF_REGION selected: ${#SUBBANDS[@]} frequency plan(s) enabled on the server."
 
-# --- 2b. gateway bridges ------------------------------------------------------
-b "2b of 8  --  Which sub-bands do your gateways transmit on?"
-BRIDGES=""
-if (( ${#SUBBANDS[@]} == 1 )); then
-  # Nothing to choose: one plan, one bridge, the standard port.
-  BRIDGES="${SUBBANDS[0]}:1700"
-  p "$RF_REGION has a single frequency plan, so there is one gateway"
-  p "connection on the standard port: ${SUBBANDS[0]} on UDP 1700."
+# --- 2b. served regions -------------------------------------------------------
+b "2b of 8  --  Which sub-bands does this site serve?"
+p "Only the sub-bands you list here are enabled on the server. Each one is"
+p "served in one of two ways:"
+p ""
+p "  a gateway bridge  this machine listens on a UDP port and the gateway"
+p "                    sends the Semtech packet-forwarder protocol at it."
+p "                    This is what almost every gateway ships set up for."
+p ""
+p "  MQTT Forwarder    the gateway runs ChirpStack's own forwarder and"
+p "                    publishes straight to our broker. Nothing to listen"
+p "                    on here. Those gateways need an MQTT login, which"
+p "                    you make later with  ./sitesync mqtt add"
+p ""
+
+# Ask once, up front, rather than per sub-band: a site almost never mixes the
+# two, and asking every time would be three questions to describe one gateway.
+if yesno "Do your gateways use the plain UDP packet forwarder (the common one)" y; then
+  DEFAULT_HOW=port
 else
-  p "Each group of gateways needs its own connection here, on its own port."
-  p "Most sites need exactly one. Add more only if different gateways use"
-  p "different channel plans."
+  DEFAULT_HOW=forwarder
+  p ""
+  p "  Noted -- no bridge containers will be created."
+fi
+
+SERVED=""
+if (( ${#SUBBANDS[@]} == 1 )); then
+  # Nothing to choose: one plan.
+  if [[ "$DEFAULT_HOW" == port ]]; then
+    SERVED="${SUBBANDS[0]}:1700"
+    p ""
+    p "$RF_REGION has a single frequency plan, so there is one gateway"
+    p "connection on the standard port: ${SUBBANDS[0]} on UDP 1700."
+  else
+    SERVED="${SUBBANDS[0]}:forwarder"
+    p ""
+    p "$RF_REGION has a single frequency plan: ${SUBBANDS[0]}, served by the"
+    p "gateways' own MQTT Forwarder."
+  fi
+else
+  p ""
+  p "Most sites serve exactly one sub-band. Add more only if different"
+  p "gateways use different channel plans."
   p ""
   for i in "${!SUBBANDS[@]}"; do
     printf '  %-11s %s\n' "${SUBBANDS[$i]}" "$(region_description "${SUBBANDS[$i]}")"
@@ -163,31 +214,36 @@ else
   p ""
   _port=1700
   while :; do
-    _sb="$(ask "Sub-band for connection $(( $(wc -w <<<"$BRIDGES") + 1 ))" "${SUBBANDS[0]}")"
+    _sb="$(ask "Sub-band $(( $(wc -w <<<"$SERVED") + 1 ))" "${SUBBANDS[0]}")"
     if [[ -z "$(rf_of_region_id "$_sb")" ]] || [[ "$(rf_of_region_id "$_sb")" != "$RF_REGION" ]]; then
       p "  '$_sb' is not a sub-band of $RF_REGION. Pick one from the list above."
       continue
     fi
-    if [[ " $BRIDGES " == *" $_sb:"* ]]; then
-      p "  $_sb already has a connection. Pick a different sub-band."
+    if [[ " $SERVED " == *" $_sb:"* ]]; then
+      p "  $_sb is already in the list. Pick a different sub-band."
       continue
     fi
-    _p="$(ask "  UDP port for $_sb" "$_port")"
-    [[ "$_p" =~ ^[0-9]+$ ]] || { p "  '$_p' is not a port number."; continue; }
-    if [[ " $BRIDGES " == *":$_p "* ]]; then
-      p "  port $_p is already used by another connection."
-      continue
+    if [[ "$DEFAULT_HOW" == forwarder ]]; then
+      SERVED="${SERVED:+$SERVED }$_sb:forwarder"
+      p "  added: $_sb, served by the gateways' MQTT Forwarder"
+    else
+      _p="$(ask "  UDP port for $_sb" "$_port")"
+      [[ "$_p" =~ ^[0-9]+$ ]] || { p "  '$_p' is not a port number."; continue; }
+      if [[ " $SERVED " == *":$_p "* ]]; then
+        p "  port $_p is already used by another connection."
+        continue
+      fi
+      SERVED="${SERVED:+$SERVED }$_sb:$_p"
+      p "  added: $_sb on UDP port $_p"
+      _port=$(( _p + 1 ))
     fi
-    BRIDGES="${BRIDGES:+$BRIDGES }$_sb:$_p"
-    p "  added: $_sb on UDP port $_p"
-    _port=$(( _p + 1 ))
     p ""
-    yesno "Add another gateway connection" n || break
+    yesno "Serve another sub-band" n || break
   done
 fi
-set_var GATEWAY_BRIDGES "\"$BRIDGES\""
+set_var SERVED_REGIONS "\"$SERVED\""
 p ""
-p "Gateway connections: $BRIDGES"
+p "Regions served: $SERVED"
 
 # --- 3. address ---------------------------------------------------------------
 # This machine's own address on the network, offered as the default. Guessing
@@ -304,7 +360,14 @@ b "7 of 8  --  Which gateway protocols does this site use?"
 PROFILES=()
 yesno "Semtech UDP packet forwarder (the common one)" y && PROFILES+=(udp)
 yesno "Basics Station" y && PROFILES+=(basicstation)
-yesno "REST / Swagger API" y && PROFILES+=(rest-api)
+
+# The REST API is not offered as a choice: other SiteSync components call it,
+# so a site without it is a broken site, not a leaner one. It is still a
+# profile rather than a plain service, because that is how it was shipped and
+# existing .env files name it.
+PROFILES+=(rest-api)
+p "The REST API is always installed -- other SiteSync components rely on it."
+
 set_var COMPOSE_PROFILES "$(IFS=,; echo "${PROFILES[*]}")"
 
 # --- 8. secrets ---------------------------------------------------------------
@@ -340,6 +403,13 @@ fi
 
 if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]]; then
   p ""
-  p "These files now belong to ${SUDO_USER}, so ./sitesync works without sudo"
-  p "once you have logged out and back in to pick up the docker group."
+  if getent group sitesync >/dev/null 2>&1; then
+    p "These files belong to the 'sitesync' group, so ./sitesync works without"
+    p "sudo once you have logged out and back in to pick up that group."
+    p "To give someone else the same access:"
+    p "    sudo usermod -aG sitesync,docker THEIR_NAME"
+  else
+    p "These files now belong to ${SUDO_USER}, so ./sitesync works without sudo"
+    p "once you have logged out and back in to pick up the docker group."
+  fi
 fi
