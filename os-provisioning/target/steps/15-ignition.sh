@@ -25,13 +25,16 @@ d="${AIRGAP_IGNITION_TARBALL%.tar.gz}"
 [[ -f "$d/install.sh" ]] || fail "$AIRGAP_IGNITION_TARBALL did not unpack into $d/install.sh"
 
 # --------------------------------------------------------------- location ---
-# The installer offers a choice of directory, so the tech gets that choice
-# here. Anywhere else it would be a flag nobody remembers; this is the one
-# moment they are looking at the screen and thinking about this machine.
+# Normally already decided: install.sh settles all three locations up front, so
+# AIRGAP_IGNITION_DIR arrives set and nothing is asked here. That is deliberate.
+# This step used to ask, and on a single-disk machine the question was the first
+# thing the tech had heard about Ignition's location -- a prompt with no lead-in,
+# landing in the middle of an install. The layout belongs in one place, with the
+# stack and Docker paths, not scattered across the steps.
 #
-# The default is the installer's own, so doing nothing gives exactly what the
-# vendor's own installer gives. --ignition-dir wins over the prompt, so an
-# unattended or scripted run is still fully determined.
+# The prompt below survives for the one case that still needs it: running this
+# step on its own, outside install.sh. The default is the vendor installer's own
+# path, so doing nothing gives exactly what their installer gives.
 DEFAULT_LOCATION="/usr/local/bin/ignition"
 LOCATION="${AIRGAP_IGNITION_DIR:-}"
 

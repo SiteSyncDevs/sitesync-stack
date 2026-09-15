@@ -156,22 +156,45 @@ ROOT_SRC="$(findmnt -no SOURCE / 2>/dev/null || echo)"
 ROOT_DISK="$(lsblk -nro PKNAME "$ROOT_SRC" 2>/dev/null | head -1)"
 [[ -z "$ROOT_DISK" ]] && ROOT_DISK="$(basename "${ROOT_SRC:-none}")"
 RAW=()
+SPARE=()
 while read -r name size type; do
   [[ "$type" == disk ]] || continue
   [[ "$name" == "$ROOT_DISK" || "$name" == zram* || "$name" == loop* || "$name" == sr* ]] && continue
   [[ "$size" == 0B ]] && continue
-  # a disk with no partitions, no filesystem signature and nothing mounted
+  # Removable media is skipped on purpose: the airgap artifact usually arrives
+  # on a USB stick, and nominating it as the data drive would destroy the
+  # installer mid-install.
+  [[ "$(lsblk -dnro RM "/dev/$name" 2>/dev/null | tr -d ' \n')" == 1 ]] && continue
+  [[ "$(lsblk -dnro RO "/dev/$name" 2>/dev/null | tr -d ' \n')" == 1 ]] && continue
+
   kids="$(lsblk -nro NAME "/dev/$name" 2>/dev/null | wc -l)"
   fst="$(lsblk -nro FSTYPE "/dev/$name" 2>/dev/null | tr -d ' \n')"
   mnt="$(lsblk -nro MOUNTPOINTS "/dev/$name" 2>/dev/null | tr -d ' \n')"
-  if (( kids <= 1 )) && [[ -z "$fst" && -z "$mnt" ]]; then
+
+  # Anything mounted, or claimed by LVM/RAID/LUKS/swap, is in use. Leave it be.
+  [[ -n "$mnt" ]] && continue
+  case "$fst" in *LVM2_member*|*linux_raid_member*|*crypto_LUKS*|*swap*) continue ;; esac
+
+  if (( kids <= 1 )) && [[ -z "$fst" ]]; then
+    # No partitions, no filesystem signature: genuinely blank.
     RAW+=("$name $size"); fact "Unused disk" "/dev/$name ($size) - no filesystem, not mounted"
+  else
+    # There IS a filesystem here, it is just not mounted. This is the dangerous
+    # case: on a re-install it is almost always the previous installation's
+    # data, and the advice is the opposite of the blank-disk advice.
+    SPARE+=("$name $size"); fact "Unmounted filesystem" "/dev/$name ($size) - $fst present, no mountpoint"
   fi
 done < <(lsblk -dnro NAME,SIZE,TYPE 2>/dev/null)
 
 if (( ${#RAW[@]} )); then
   warn "${#RAW[@]} unused disk(s) present but not set up. Docker cannot use a disk
               that is not partitioned, formatted and mounted. See SETUP below."
+fi
+
+if (( ${#SPARE[@]} )); then
+  warn "${#SPARE[@]} disk(s) already hold a filesystem but are not mounted. Do NOT
+              format these -- on a re-install this is the previous installation's
+              data. Identify them with 'sudo blkid', then mount them."
 fi
 
 # ----------------------------------------------------------------- ram -------

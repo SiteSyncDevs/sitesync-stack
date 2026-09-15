@@ -23,7 +23,7 @@
 #     --install-dir DIR   where the stack lives     (default /opt/sitesync)
 #     --data-root DIR     where Docker's data lives (default /var/lib/docker)
 #     --data-root auto    pick the largest suitable non-root filesystem
-#     --ignition-dir DIR  where Ignition goes; without it, step 15 asks
+#     --ignition-dir DIR  where Ignition goes  (default /usr/local/bin/ignition)
 #
 # WHICH COMPONENTS
 #     --only-docker | --only-chirpstack | --only-ignition   (repeatable)
@@ -136,6 +136,103 @@ data_candidates() {
     | awk 'NR>1 && $6!="/" && $4>=10737418240 {print $6, $4}' | sort -k2 -rn
 }
 
+# df only sees filesystems that are mounted, so a 500 GB disk that was attached
+# to the VM and never formatted is completely invisible to the check above --
+# the install quietly goes onto the OS disk and nobody finds out until the
+# machine fills up. Look at the block devices too, and say what is there.
+#
+# Two findings are worth reporting, and they need opposite advice:
+#   raw        no filesystem at all -> it can be made into a data drive
+#   unmounted  has a filesystem but no mountpoint -> MOUNT it, never format it;
+#              on a re-install that disk is the previous install's data.
+# Anything in use is skipped silently.
+#
+# Removable devices are excluded deliberately: on an airgap install the artifact
+# itself usually arrives on a USB stick, and telling the tech to mkfs the disk
+# they are running from would be a very bad afternoon.
+unused_disks() {  # prints: <kind> <dev> <bytes> <model>
+  command -v lsblk >/dev/null 2>&1 || return 0
+  local rootdisk
+  rootdisk="$(lsblk -no PKNAME "$(findmnt -no SOURCE / 2>/dev/null)" 2>/dev/null | head -1)"
+  lsblk -b -P -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINT,PKNAME,RO,RM,MODEL 2>/dev/null \
+  | awk -v rootdisk="$rootdisk" '
+      { delete f
+        # lsblk -P gives KEY="value" pairs; split them back out.
+        n = split($0, parts, /" /)
+        for (i = 1; i <= n; i++) {
+          eq = index(parts[i], "=")
+          k = substr(parts[i], 1, eq - 1)
+          v = substr(parts[i], eq + 2)
+          gsub(/"$/, "", v)
+          f[k] = v
+        }
+        if (f["TYPE"] == "disk") {
+          disk[f["NAME"]] = 1
+          size[f["NAME"]]  = f["SIZE"]
+          fstype[f["NAME"]]= f["FSTYPE"]
+          mnt[f["NAME"]]   = f["MOUNTPOINT"]
+          ro[f["NAME"]]    = f["RO"]
+          rm[f["NAME"]]    = f["RM"]
+          model[f["NAME"]] = f["MODEL"]
+        } else if (f["PKNAME"] != "") {
+          # A partition (or an LVM/RAID member sitting on one). Its parent is
+          # spoken for whether or not this particular child is mounted.
+          kids[f["PKNAME"]]++
+          if (f["MOUNTPOINT"] != "" || f["FSTYPE"] ~ /LVM2_member|linux_raid_member|crypto_LUKS|swap/)
+            used[f["PKNAME"]] = 1
+          if (f["FSTYPE"] != "" && f["MOUNTPOINT"] == "")
+            spare[f["PKNAME"]] = 1
+        }
+      }
+      END {
+        for (d in disk) {
+          if (d == rootdisk)             continue
+          if (ro[d] == "1" || rm[d] == "1") continue
+          if (size[d] + 0 < 10737418240) continue
+          if (used[d])                   continue
+          if (mnt[d] != "")              continue
+          if (fstype[d] ~ /LVM2_member|linux_raid_member|crypto_LUKS|swap/) continue
+          if (fstype[d] != "" || spare[d])
+            print "unmounted", d, size[d], model[d]
+          else if (kids[d] == 0)
+            print "raw", d, size[d], model[d]
+        }
+      }' | sort -k3 -rn
+}
+
+# Report what unused_disks found. Never acts -- device names are not stable and
+# mkfs is not reversible, so the commands are printed for a human to run.
+report_unused_disks() {
+  local kind dev bytes model gb found=0
+  while read -r kind dev bytes model; do
+    found=$(( found + 1 ))
+    echo
+    gb=$(( bytes / 1000000000 ))
+    if [[ "$kind" == raw ]]; then
+      printf '   note: /dev/%s (%d GB%s) is attached but has no filesystem.\n' \
+        "$dev" "$gb" "${model:+, $model}"
+      printf '         It is NOT being used, and nothing below will be installed on it.\n\n'
+      printf '         To make it a data drive before continuing, on this machine:\n'
+      printf '             sudo parted /dev/%s --script mklabel gpt mkpart data ext4 0%% 100%%\n' "$dev"
+      printf '             sudo mkfs.ext4 -L sitesync-data /dev/%s1\n' "$dev"
+      printf '             echo "UUID=$(blkid -s UUID -o value /dev/%s1) /mnt/data ext4 defaults 0 2" | sudo tee -a /etc/fstab\n' "$dev"
+      printf '             sudo mkdir -p /mnt/data && sudo mount -a\n'
+      printf '         Then start again:  sudo bash install.sh\n'
+    else
+      printf '   note: /dev/%s (%d GB%s) already has a filesystem but is not mounted.\n' \
+        "$dev" "$gb" "${model:+, $model}"
+      printf '         Do NOT format it -- on a re-install this is usually the previous\n'
+      printf '         installation'"'"'s data. Mount it and start again:\n'
+      printf '             sudo blkid /dev/%s*\n' "$dev"
+      printf '             sudo mkdir -p /mnt/data\n'
+      printf '             # add the UUID to /etc/fstab, then:\n'
+      printf '             sudo mount -a\n'
+    fi
+  done < <(unused_disks)
+  (( found )) && echo
+  return 0
+}
+
 if [[ -z "$INSTALL_ROOT" ]] && (( ! NO_INSTALL_ROOT )) \
    && [[ -z "$INSTALL_DIR" && -z "$DATA_ROOT" && -z "$IGNITION_DIR" ]]; then
   mapfile -t _cands < <(data_candidates)
@@ -163,6 +260,19 @@ if [[ -z "$INSTALL_ROOT" ]] && (( ! NO_INSTALL_ROOT )) \
     # No terminal to ask on. Silence must mean the safe, unchanged default.
     echo "note: a second drive was found but there is no terminal to ask on;" >&2
     echo "      installing to the OS disk. Use --install-root to place it." >&2
+  else
+    # No second filesystem. Previously this branch said nothing at all, and the
+    # tech's first hint that a location decision even existed was step 15
+    # asking where Ignition should go -- a question with no lead-in, about a
+    # product they may not have known was in the artifact. Say plainly that the
+    # decision was made and what it came to.
+    banner "Where this will be installed"
+    printf '   No second drive is mounted, so everything goes on the OS disk:\n\n'
+    printf '     stack      /opt/sitesync\n'
+    printf '     docker     /var/lib/docker\n'
+    printf '     ignition   /usr/local/bin/ignition\n\n'
+    printf '   To put it somewhere else, stop now and re-run with --install-root PATH.\n'
+    report_unused_disks
   fi
 fi
 
@@ -190,6 +300,15 @@ if [[ -n "$INSTALL_ROOT" ]]; then
   fi
 fi
 INSTALL_DIR="${INSTALL_DIR:-/opt/sitesync}"
+
+# Ignition's location is settled here, not at step 15. The vendor installer has
+# no default of its own, so step 15 used to ask -- but by the time it asks, the
+# tech is halfway through an install and the question arrives with no context.
+# Decide it up front with the other two paths: the same value the installer
+# would have suggested, chosen where the layout is being decided anyway.
+# --ignition-dir and --install-root both still win, and step 15 keeps its own
+# prompt for the case where someone runs that step directly.
+IGNITION_DIR="${IGNITION_DIR:-/usr/local/bin/ignition}"
 
 # The data root reaches the Docker installer as a passthrough flag.
 if [[ "$DATA_ROOT" == none ]]; then
@@ -256,7 +375,7 @@ if (( DO_DOCKER )); then
   echo "   docker      Docker Engine            -> ${DATA_ROOT:-/var/lib/docker}"
 fi
 if (( DO_IGNITION )); then
-  echo "   ignition    Ignition gateway         -> ${IGNITION_DIR:-(asked during install)}"
+  echo "   ignition    Ignition gateway         -> $IGNITION_DIR"
 fi
 if (( DO_CHIRPSTACK )); then
   echo "   chirpstack  images, stack, site      -> $INSTALL_DIR"

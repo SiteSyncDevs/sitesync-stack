@@ -45,6 +45,53 @@ site_url() {
   fi
 }
 
+# The same site on WEB_ALT_PORT, or nothing if that port is turned off.
+site_alt_url() {
+  local scheme=https p="${WEB_ALT_PORT:-}"
+  [[ -n "$p" ]] || return 0
+  [[ "${TLS_MODE:-self-signed}" == "off" ]] && scheme=http
+  echo "$scheme://${SITE_DOMAIN:-localhost}:$p"
+}
+
+# Everything a person needs to connect something to this site, in one block.
+#
+# This exists because the install used to end without it. Techs finished a
+# working install and then had to guess the web port (they tried :8080, because
+# that is what upstream chirpstack-docker uses), guess the MQTT port, and ask
+# someone for the MQTT password -- which then got written into a document, which
+# is the one place a generated per-site password must never end up.
+cmd_info() {
+  require_env
+  bold "How to connect to ${SITE_LABEL:-this site}"
+  echo
+  info "  Web interface   $(site_url)"
+  local alt; alt="$(site_alt_url)"
+  [[ -n "$alt" ]] && info "                  $alt   (same site, for habit)"
+  if [[ "${TLS_MODE:-}" == "self-signed" ]]; then
+    info "                  your browser warns once about the certificate -- expected"
+  fi
+  case ",${COMPOSE_PROFILES:-}," in *,rest-api,*)
+    local s=https
+    [[ "${TLS_MODE:-}" == "off" ]] && s=http
+    info "  REST API        $s://${SITE_DOMAIN:-localhost}:${REST_API_PORT:-8090}" ;;
+  esac
+  echo
+  info "  MQTT host       ${SITE_DOMAIN:-this host}"
+  info "  MQTT port       ${MQTT_PORT:-1883}"
+  [[ "${MQTT_TLS:-off}" != "off" ]] && \
+  info "                  ${MQTT_TLS_PORT:-8883} encrypted; trust certs/mqtt-ca.pem"
+  if [[ "${MQTT_AUTH_ENABLED:-true}" == "true" ]]; then
+    info "  MQTT username   ${MQTT_USERNAME:-chirpstack}"
+    info "  MQTT password   run:  ./sitesync mqtt-info"
+  else
+    info "  MQTT login      not required"
+  fi
+  echo
+  info "  The MQTT password is generated per site and lives only in .env."
+  info "  Read it with ./sitesync mqtt-info when you need it. Do not copy it into"
+  info "  a document, a ticket or a chat message."
+}
+
 # -----------------------------------------------------------------------------
 cmd_help() {
   cat <<'TXT'
@@ -53,6 +100,7 @@ cmd_help() {
 
   EVERYDAY
     ./sitesync status        Is everything running? Where do I point my browser?
+    ./sitesync info          Every address, port and username needed to connect.
     ./sitesync apply         I changed .env -- make it take effect.
     ./sitesync logs [name]   Show what a service is saying. Ctrl-C to stop.
     ./sitesync doctor        Check the settings and tell me what is wrong.
@@ -212,6 +260,8 @@ cmd_status() {
   "${DC[@]}" ps --format 'table {{.Service}}\t{{.Status}}' || true
   echo
   info "Web interface:  $(site_url)"
+  local _alt; _alt="$(site_alt_url)"
+  [[ -n "$_alt" ]] && info "                $_alt   (same site)"
   if [[ "${TLS_MODE:-}" == "self-signed" ]]; then
     info "                (your browser will warn once about the certificate -- that is expected)"
   fi
@@ -483,6 +533,7 @@ case "${1:-help}" in
   pin)            cmd_pin ;;
   region|regions) shift || true; cmd_region "$@" ;;
   mqtt)           shift; cmd_mqtt "$@" ;;
+  info)           cmd_info ;;
   mqtt-info)      cmd_mqtt_info ;;
   ca)             cmd_ca ;;
   *) die "I do not know the command '$1'. Run ./sitesync help" ;;

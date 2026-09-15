@@ -5,7 +5,10 @@
 #     certs/key.pem     the private key, not password protected
 # If your files are named differently, set TLS_CERT_FILE and TLS_KEY_FILE.
 
-https://{$SITE_DOMAIN} {
+# 8080 is served as well as 443 -- see self-signed.caddy for why. Your
+# certificate needs to cover SITE_DOMAIN; the port is not part of what a
+# certificate certifies, so nothing extra is required for 8080.
+https://{$SITE_DOMAIN}, https://{$SITE_DOMAIN}:{$WEB_ALT_PORT} {
 	tls /certs/{$TLS_CERT_FILE} /certs/{$TLS_KEY_FILE}
 	reverse_proxy chirpstack:8080
 }

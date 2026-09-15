@@ -66,8 +66,12 @@ TXT
 fi
 
 cd "$DEST"
-bash scripts/doctor.sh || true
+# Via ./sitesync so that .env is loaded first -- doctor.sh reads its settings
+# from the environment and does not source .env itself. Run as a bare script it
+# reports every setting as missing.
+./sitesync doctor || true
 ./sitesync status 2>/dev/null || true
+./sitesync info 2>/dev/null || true
 
 cat <<TXT
 

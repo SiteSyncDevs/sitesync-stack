@@ -7,7 +7,11 @@
 #   - TLS_EMAIL is filled in
 # Run ./sitesync doctor and it will tell you which of these is not met.
 
-https://{$SITE_DOMAIN} {
+# 8080 is served as well as 443 -- see self-signed.caddy for why. It uses the
+# same certificate, so it costs nothing extra to issue. Note that ACME still
+# validates over 80 and 443: 8080 is an additional way in, never a replacement,
+# and moving the site off 80/443 would break renewals.
+https://{$SITE_DOMAIN}, https://{$SITE_DOMAIN}:{$WEB_ALT_PORT} {
 	tls {$TLS_EMAIL}
 	reverse_proxy chirpstack:8080
 }

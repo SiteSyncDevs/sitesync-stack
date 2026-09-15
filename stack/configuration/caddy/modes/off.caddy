@@ -1,7 +1,10 @@
 # TLS_MODE=off  --  plain HTTP, no encryption.
 # Answers on any hostname or IP address, so there is nothing to get wrong.
 
-:80 {
+# 8080 answers as well as 80 -- see self-signed.caddy for why. In this mode
+# both are plain HTTP, which is exactly what upstream chirpstack-docker does,
+# so http://host:8080 behaves the way a tech expects with no redirect at all.
+:80, :{$WEB_ALT_PORT} {
 	reverse_proxy chirpstack:8080
 }
 

@@ -5,7 +5,12 @@
 # (chirpstack.acme.local) or an IP address (192.168.1.50). The certificate is
 # issued for that value, so if it does not match, the warning will not go away.
 
-https://{$SITE_DOMAIN} {
+# The second address is the same site on 8080, where techs habitually look --
+# upstream chirpstack-docker publishes ChirpStack's UI there. Both addresses
+# are on this one site block so there is no second copy to keep in step.
+# A tech who types http://host:8080 out of habit gets Caddy's redirect to the
+# https form of the same port, rather than a failed handshake.
+https://{$SITE_DOMAIN}, https://{$SITE_DOMAIN}:{$WEB_ALT_PORT} {
 	tls internal
 	reverse_proxy chirpstack:8080
 }

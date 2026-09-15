@@ -106,7 +106,7 @@ cat <<'TXT'
   SiteSync ChirpStack -- first-time setup
 ===============================================================================
 
-  This asks about eight questions and writes a file called .env.
+  This asks eight questions and writes a file called .env.
 
   You can change any answer later by opening .env in a text editor and
   running  ./sitesync apply  -- you never have to run this script again.
@@ -162,47 +162,23 @@ mapfile -t SUBBANDS < <(region_ids_for "$RF_REGION")
 p ""
 p "$RF_REGION selected: ${#SUBBANDS[@]} frequency plan(s) enabled on the server."
 
-# --- 2b. served regions -------------------------------------------------------
-b "2b of 8  --  Which sub-bands does this site serve?"
-p "Only the sub-bands you list here are enabled on the server. Each one is"
-p "served in one of two ways:"
-p ""
-p "  a gateway bridge  this machine listens on a UDP port and the gateway"
-p "                    sends the Semtech packet-forwarder protocol at it."
-p "                    This is what almost every gateway ships set up for."
-p ""
-p "  MQTT Forwarder    the gateway runs ChirpStack's own forwarder and"
-p "                    publishes straight to our broker. Nothing to listen"
-p "                    on here. Those gateways need an MQTT login, which"
-p "                    you make later with  ./sitesync mqtt add"
+# --- 3. which sub-bands -------------------------------------------------------
+# Sub-bands are chosen in full here, and only then does the next question ask
+# how gateways reach them. The two used to be interleaved -- the transport
+# question came first, above the menu -- so by the time the tech had scrolled
+# through twenty us915_* rows the answer they had just given was off the top of
+# the screen, and they were picking sub-bands without remembering what they had
+# said. One list, one decision, then the next decision.
+b "3 of 8  --  Which sub-bands does this site serve?"
+p "Only the sub-bands you list here are enabled on the server."
 p ""
 
-# Ask once, up front, rather than per sub-band: a site almost never mixes the
-# two, and asking every time would be three questions to describe one gateway.
-if yesno "Do your gateways use the plain UDP packet forwarder (the common one)" y; then
-  DEFAULT_HOW=port
-else
-  DEFAULT_HOW=forwarder
-  p ""
-  p "  Noted -- no bridge containers will be created."
-fi
-
-SERVED=""
+CHOSEN=()
 if (( ${#SUBBANDS[@]} == 1 )); then
-  # Nothing to choose: one plan.
-  if [[ "$DEFAULT_HOW" == port ]]; then
-    SERVED="${SUBBANDS[0]}:1700"
-    p ""
-    p "$RF_REGION has a single frequency plan, so there is one gateway"
-    p "connection on the standard port: ${SUBBANDS[0]} on UDP 1700."
-  else
-    SERVED="${SUBBANDS[0]}:forwarder"
-    p ""
-    p "$RF_REGION has a single frequency plan: ${SUBBANDS[0]}, served by the"
-    p "gateways' own MQTT Forwarder."
-  fi
+  CHOSEN=("${SUBBANDS[0]}")
+  p "$RF_REGION has a single frequency plan, so there is nothing to choose:"
+  p "${SUBBANDS[0]} it is."
 else
-  p ""
   p "Most sites serve exactly one sub-band. Add more only if different"
   p "gateways use different channel plans."
   p ""
@@ -210,38 +186,118 @@ else
   p ""
   p "If you are unsure, the first one in the list is the usual choice."
   p ""
-  _port=1700
   while :; do
-    _sb="$(ask "Sub-band $(( $(wc -w <<<"$SERVED") + 1 ))" "${SUBBANDS[0]}")"
-    if [[ -z "$(rf_of_region_id "$_sb")" ]] || [[ "$(rf_of_region_id "$_sb")" != "$RF_REGION" ]]; then
+    _sb="$(ask "Sub-band $(( ${#CHOSEN[@]} + 1 ))" "${SUBBANDS[0]}")"
+    if [[ "$(rf_of_region_id "$_sb")" != "$RF_REGION" ]]; then
       p "  '$_sb' is not a sub-band of $RF_REGION. Pick one from the list above."
       continue
     fi
-    if [[ " $SERVED " == *" $_sb:"* ]]; then
+    if [[ " ${CHOSEN[*]-} " == *" $_sb "* ]]; then
       p "  $_sb is already in the list. Pick a different sub-band."
       continue
     fi
-    if [[ "$DEFAULT_HOW" == forwarder ]]; then
-      SERVED="${SERVED:+$SERVED }$_sb:forwarder"
-      p "  added: $_sb, served by the gateways' MQTT Forwarder"
-    else
-      _p="$(ask "  UDP port for $_sb" "$_port")"
-      [[ "$_p" =~ ^[0-9]+$ ]] || { p "  '$_p' is not a port number."; continue; }
-      if [[ " $SERVED " == *":$_p "* ]]; then
-        p "  port $_p is already used by another connection."
-        continue
-      fi
-      SERVED="${SERVED:+$SERVED }$_sb:$_p"
-      p "  added: $_sb on UDP port $_p"
-      _port=$(( _p + 1 ))
-    fi
+    CHOSEN+=("$_sb")
+    p "  added: $_sb"
     p ""
     yesno "Serve another sub-band" n || break
   done
 fi
+p ""
+p "Sub-bands: ${CHOSEN[*]}"
+
+# --- 4. how gateways connect --------------------------------------------------
+# One question, three answers. It used to be two separate yes/no prompts in two
+# different sections -- one here and one at the old step 7 -- which meant
+# "both" was reachable by accident: answering no here and yes there produced
+# forwarder-mode SERVED_REGIONS with UDP bridge containers also running, and
+# nothing said a word about it. Making "both" an explicit third choice is the
+# whole fix.
+b "4 of 8  --  How do the gateways reach this server?"
+p "  1) Semtech UDP packet forwarder"
+p "       This machine listens on a UDP port and the gateway sends packets"
+p "       at it. This is what almost every gateway ships set up for, and it"
+p "       is the right answer unless you know otherwise.   RECOMMENDED"
+p ""
+p "  2) ChirpStack MQTT Forwarder"
+p "       The gateway runs ChirpStack's own forwarder and publishes straight"
+p "       to our broker. Nothing listens here, and no bridge containers are"
+p "       created. Those gateways need an MQTT login, which you make later"
+p "       with  ./sitesync mqtt add"
+p ""
+p "  3) Both"
+p "       Only if this site genuinely has some of each. It runs the bridge"
+p "       containers as well, so it costs more than picking one."
+p ""
+case "$(ask 'Choose' '1')" in
+  2) TRANSPORT=forwarder ;;
+  3) TRANSPORT=both ;;
+  *) TRANSPORT=udp ;;
+esac
+
+PROFILES=()
+SERVED=""
+case "$TRANSPORT" in
+  forwarder)
+    for _sb in "${CHOSEN[@]}"; do SERVED="${SERVED:+$SERVED }$_sb:forwarder"; done
+    p ""
+    p "Noted -- no bridge containers will be created."
+    ;;
+  *)
+    # UDP, or both. Ports are asked for now that the sub-band list is settled,
+    # so the tech is answering "which port for THIS one" against a list they
+    # have already seen rather than building both at once.
+    #
+    # "Both" needs nothing extra here. A gateway running the MQTT Forwarder
+    # publishes straight onto the same region topics the bridges use, so the
+    # bridge containers serve the UDP gateways and the forwarder gateways just
+    # arrive. The only difference is that those gateways need an MQTT login.
+    PROFILES+=(udp)
+    _port=1700
+    if (( ${#CHOSEN[@]} == 1 )); then
+      SERVED="${CHOSEN[0]}:1700"
+      p ""
+      p "One sub-band, so one gateway connection on the standard port:"
+      p "${CHOSEN[0]} on UDP 1700."
+    else
+      p ""
+      p "Each sub-band needs its own UDP port. 1700 is the standard one; the"
+      p "rest just have to be free and reachable from the gateways."
+      p ""
+      for _sb in "${CHOSEN[@]}"; do
+        while :; do
+          _p="$(ask "  UDP port for $_sb" "$_port")"
+          [[ "$_p" =~ ^[0-9]+$ ]] || { p "  '$_p' is not a port number."; continue; }
+          if [[ " $SERVED " == *":$_p "* ]]; then
+            p "  port $_p is already used by another connection."
+            continue
+          fi
+          break
+        done
+        SERVED="${SERVED:+$SERVED }$_sb:$_p"
+        p "  $_sb on UDP port $_p"
+        _port=$(( _p + 1 ))
+      done
+    fi
+    ;;
+esac
+
+# The REST API is not offered as a choice: other SiteSync components call it,
+# so a site without it is a broken site, not a leaner one. It is still a
+# profile rather than a plain service, because that is how it was shipped and
+# existing .env files name it.
+PROFILES+=(rest-api)
+
 set_var SERVED_REGIONS "\"$SERVED\""
+set_var COMPOSE_PROFILES "$(IFS=,; echo "${PROFILES[*]}")"
 p ""
 p "Regions served: $SERVED"
+p "The REST API is always installed -- other SiteSync components rely on it."
+if [[ "$TRANSPORT" == both ]]; then
+  p ""
+  p "Gateways running the MQTT Forwarder publish onto these same sub-bands, so"
+  p "there is nothing more to set up for them here -- but each one needs an MQTT"
+  p "login. Make them with:  ./sitesync mqtt add"
+fi
 
 # --- 3. address ---------------------------------------------------------------
 # This machine's own address on the network, offered as the default. Guessing
@@ -254,7 +310,26 @@ guess_address() {
 }
 DEFAULT_ADDR="$(guess_address)"
 
-b "3 of 8  --  What address will people type in their browser?"
+# RFC1918, plus CGNAT (100.64/10) and link-local. A machine behind NAT -- which
+# is every cloud VM -- can only ever see this side of the translation, so the
+# address we detect is not the address anyone types. That is the single biggest
+# source of wrong answers here, and it is worth saying out loud rather than
+# presenting the private IP as though it were the answer.
+is_private_addr() {
+  case "$1" in
+    10.*|192.168.*|169.254.*|100.6[4-9].*|100.[7-9][0-9].*|100.1[0-1][0-9].*|100.12[0-7].*) return 0 ;;
+    172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# A fully-qualified hostname, if the machine has been given one, is a better
+# answer than any IP -- it survives the address changing. Only offer it when it
+# is actually qualified: the bare short hostname resolves nowhere useful.
+FQDN="$(hostname -f 2>/dev/null || true)"
+[[ "$FQDN" == *.* && "$FQDN" != *.local ]] || FQDN=""
+
+b "5 of 8  --  What address will people type in their browser?"
 p "This has to be EXACTLY what they type -- a DNS name (chirpstack.acme.local)"
 p "or an IP address (192.168.1.50). It is not just a label:"
 p ""
@@ -264,12 +339,33 @@ p ""
 p "Get it wrong and the site refuses connections from other machines, or shows"
 p "a certificate warning that never goes away no matter what you click."
 p ""
-if [[ "$DEFAULT_ADDR" != localhost ]]; then
-  p "This machine appears to be at $DEFAULT_ADDR on the network."
-  p "Use that unless you have a DNS name pointing here, which is better because"
-  p "it survives the IP changing."
-else
+if [[ "$DEFAULT_ADDR" == localhost ]]; then
   p "I could not work out this machine's network address automatically."
+else
+  p "This machine sees itself at $DEFAULT_ADDR."
+fi
+
+if [[ -n "$FQDN" ]]; then
+  p ""
+  p "It also has the hostname $FQDN. If that name resolves to this machine"
+  p "for the people who will use the site, it is the better answer -- a name"
+  p "survives the IP changing."
+fi
+
+if is_private_addr "$DEFAULT_ADDR"; then
+  p ""
+  p "  NOTE: $DEFAULT_ADDR is a private address, and it may not be the address"
+  p "  you reached this machine on. On a cloud VM (Azure, AWS) or behind any"
+  p "  NAT or load balancer, the machine cannot see its own public address --"
+  p "  it only ever sees this side of the translation."
+  p ""
+  p "  So do not just press Enter here. Look at what you typed to get in:"
+  p "  the name or IP in your SSH command, or in your browser's address bar."
+  p "  If that is not $DEFAULT_ADDR, type it in below instead."
+  if [[ -n "${SSH_CONNECTION:-}" ]]; then
+    p ""
+    p "  (You are connected over SSH from $(awk '{print $1}' <<<"$SSH_CONNECTION").)"
+  fi
 fi
 p ""
 p "Only answer 'localhost' if you will use ChirpStack from this machine and"
@@ -293,11 +389,16 @@ while (( _tries++ < 10 )); do
 done
 set_var SITE_DOMAIN "$SITE_DOMAIN"
 p ""
-p "Noted. People will reach this site at $SITE_DOMAIN"
-p "If that ever changes, edit SITE_DOMAIN in .env and run ./sitesync apply."
+p "Noted:"
+p "  the certificate will be issued for   $SITE_DOMAIN"
+p "  the web server will answer only to   $SITE_DOMAIN"
+p ""
+p "Anything else -- a different IP, a different name -- will be refused or will"
+p "warn. If that turns out to be wrong, it is one line: edit SITE_DOMAIN in .env"
+p "and run ./sitesync apply."
 
 # --- 4. TLS -------------------------------------------------------------------
-b "4 of 8  --  How should the web interface be secured?"
+b "6 of 8  --  How should the web interface be secured?"
 p "  1) self-signed  HTTPS straight away, nothing to obtain or renew."
 p "                  Browsers show a one-time warning you click past."
 p "                  RECOMMENDED unless you already have a certificate."
@@ -326,7 +427,7 @@ elif [[ "$TLS_MODE" == custom ]]; then
 fi
 
 # --- 5. MQTT login ------------------------------------------------------------
-b "5 of 8  --  Should MQTT require a login?"
+b "7 of 8  --  Should MQTT require a login?"
 p "Gateways and any integration would need a username and password."
 if yesno "Require a login" y; then
   set_var MQTT_AUTH_ENABLED true
@@ -341,7 +442,7 @@ else
 fi
 
 # --- 6. MQTT encryption -------------------------------------------------------
-b "6 of 8  --  Should MQTT traffic be encrypted?"
+b "8 of 8  --  Should MQTT traffic be encrypted?"
 p "Say no if gateways are on the same network or a VPN. Say yes if they cross"
 p "the public internet. The unencrypted port stays open either way, so you can"
 p "move gateways over one at a time."
@@ -353,23 +454,16 @@ else
   set_var MQTT_TLS off
 fi
 
-# --- 7. optional pieces -------------------------------------------------------
-b "7 of 8  --  Which gateway protocols does this site use?"
-PROFILES=()
-yesno "Semtech UDP packet forwarder (the common one)" y && PROFILES+=(udp)
-yesno "Basics Station" y && PROFILES+=(basicstation)
+# Basics Station is deliberately not asked about. It was a question every tech
+# had to answer and no site we run actually uses, sitting immediately after a
+# near-identical UDP question -- two prompts describing the same decision, which
+# is exactly what made the old step 7 confusing. The profile and its
+# configuration/chirpstack-gateway-bridge/*-basicstation-*.toml files are still
+# in the tree: a site that needs it adds `basicstation` to COMPOSE_PROFILES in
+# .env and runs ./sitesync apply.
 
-# The REST API is not offered as a choice: other SiteSync components call it,
-# so a site without it is a broken site, not a leaner one. It is still a
-# profile rather than a plain service, because that is how it was shipped and
-# existing .env files name it.
-PROFILES+=(rest-api)
-p "The REST API is always installed -- other SiteSync components rely on it."
-
-set_var COMPOSE_PROFILES "$(IFS=,; echo "${PROFILES[*]}")"
-
-# --- 8. secrets ---------------------------------------------------------------
-b "8 of 8  --  Generating secrets"
+# --- 7. secrets ---------------------------------------------------------------
+b "Generating secrets"
 set_var CHIRPSTACK_API_SECRET "$(randstr 48)"
 set_var POSTGRES_PASSWORD "$(randstr 32)"
 p "Done. These are unique to this site and live only in .env."
@@ -389,7 +483,12 @@ hand_back_ownership
 b "Setup complete."
 p "Your settings are in .env. Every line there has a comment explaining it."
 p ""
-bash scripts/doctor.sh || true
+# Through ./sitesync, not `bash scripts/doctor.sh`. doctor.sh reads its settings
+# from the environment and does not load .env itself -- ./sitesync does that for
+# it. Run directly, it saw no variables at all and ended a perfectly good setup
+# with six bogus "[ FIX ]" lines: RF_REGION not set, TLS_MODE empty, secrets
+# empty. All of them had just been written to .env one screen earlier.
+./sitesync doctor || true
 p ""
 if yesno "Start the site now" y; then
   ./sitesync start
@@ -398,6 +497,13 @@ if yesno "Start the site now" y; then
 else
   p "When you are ready:  ./sitesync start"
 fi
+
+# Hand over the connection details explicitly. Without this the install ends
+# with a running site and no statement of how to reach it, and the tech goes
+# looking -- for the web port, for the MQTT port, for the password. Every one
+# of those is already known here, so say them.
+p ""
+./sitesync info || true
 
 if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]]; then
   p ""
