@@ -73,12 +73,13 @@ tar xf airgap-noble-cs4.11.0-20260908.tar
 
 Use the real filename. If you are not sure what it is, `ls *.tar` lists it.
 
+Note that extracting the install archive can take several minutes.
+
 This creates a folder with the same name. Go into it:
 
 ```bash
 cd airgap-noble-cs4.11.0-20260908
 ```
-
 Have a look at what you have — this is optional but takes two seconds:
 
 ```bash
