@@ -13,12 +13,12 @@ Copy and paste them, then replace the placeholders.
 > placeholders. Replace the whole thing, brackets included, with your real
 > value. Nothing you paste should still have `<` or `>` in it.
 >
-> | Placeholder | Means | Example |
-> |---|---|---|
-> | `<BUNDLE>.tar` | The file you were given | `airgap-noble-cs4.11.0-20260908.tar` |
-> | `<BUNDLE>` | The same name without `.tar` | `airgap-noble-cs4.11.0-20260908` |
-> | `<USER>` | Your login name on the server | `siteadmin` |
-> | `<SERVER>` | The server's IP or DNS name | `192.168.1.50` |
+> | Placeholder    | Means                         | Example                              |
+> | -------------- | ----------------------------- | ------------------------------------ |
+> | `<BUNDLE>.tar` | The file you were given       | `airgap-noble-cs4.11.0-20260908.tar` |
+> | `<BUNDLE>`     | The same name without `.tar`  | `airgap-noble-cs4.11.0-20260908`     |
+> | `<USER>`       | Your login name on the server | `siteadmin`                          |
+> | `<SERVER>`     | The server's IP or DNS name   | `192.168.1.50`                       |
 
 ---
 
@@ -33,8 +33,8 @@ You need:
 - [ ] Its password
 - [ ] **Free disk space.** The installer requires 8 GB free on `/var/lib` plus
       4 GB wherever Ignition goes, and refuses to start without it. Aim for
-      40 GB on the VM so you are not fighting it — see *"Not enough disk
-      space"* in Troubleshooting.
+      40 GB on the VM so you are not fighting it — see _"Not enough disk
+      space"_ in Troubleshooting.
 - [ ] The site's network address — a DNS name like `chirpstack.acme.local`, or
       an IP like `192.168.1.50`. You will be asked for it near the end.
 - [ ] Which **radio region** the gateways are certified for (US915, EU868, …).
@@ -145,16 +145,16 @@ for.
 
 ### What happens, in order
 
-| Step | What it does | Roughly |
-|---|---|---|
-| — | Checks the files copied over intact | seconds |
-| **00** | Checks the machine before changing anything | seconds |
-| **10** | Installs Docker Engine from the offline package repo | 1–2 min |
-| **15** | Installs the Ignition gateway on the machine itself | 5–15 min |
-| **20** | Loads the container images | 2–5 min |
-| **30** | Installs the stack to `/opt/sitesync` | seconds |
-| **40** | **Asks you the site questions**, then offers to start the site | 5 min |
-| **50** | Checks the result and prints the addresses | 1–2 min |
+| Step   | What it does                                                   | Roughly  |
+| ------ | -------------------------------------------------------------- | -------- |
+| —      | Checks the files copied over intact                            | seconds  |
+| **00** | Checks the machine before changing anything                    | seconds  |
+| **10** | Installs Docker Engine from the offline package repo           | 1–2 min  |
+| **15** | Installs the Ignition gateway on the machine itself            | 5–15 min |
+| **20** | Loads the container images                                     | 2–5 min  |
+| **30** | Installs the stack to `/opt/sitesync`                          | seconds  |
+| **40** | **Asks you the site questions**, then offers to start the site | 5 min    |
+| **50** | Checks the result and prints the addresses                     | 1–2 min  |
 
 Step 00 changes nothing. If it fails, the machine is exactly as you found it.
 
@@ -191,7 +191,7 @@ If there is no second drive, nothing is asked and everything goes on the OS
 disk.
 
 **During step 15 — where to install Ignition.** You only see this if you did
-*not* answer the question above (no second drive, or you declined it):
+_not_ answer the question above (no second drive, or you declined it):
 
 ```
    Where should Ignition be installed?
@@ -233,17 +233,17 @@ suggestion shown in `[brackets]` — the suggestions are usually right.
 Every answer can be changed later by editing one file. Nothing here is
 permanent.
 
-| # | Question | What to answer |
-|---|---|---|
-| **1** | Who is this site for? | A short lowercase name, no spaces — `acme`. Then the full name for reports — `Acme Manufacturing`. |
-| **2** | Which radio region? | From the gateway's datasheet. `US915` in North America, `EU868` in Europe. The list of valid options is printed on screen. |
-| **2b** | Which sub-bands does this site serve? | First it asks whether your gateways use the plain UDP packet forwarder — **almost always yes, press Enter**. Then: **press Enter at each prompt** — first sub-band, UDP port 1700, then "no" to adding another. Only add more if different gateways use different channel plans. Regions with a single frequency plan skip the rest. See below if your gateways run the MQTT Forwarder instead. |
-| **3** | What address will people type in their browser? | **The most important answer here.** See below. |
-| **4** | How should the web interface be secured? | **Press Enter for `1) self-signed`** unless the customer already has a certificate. Browsers show a one-time warning that you click past. |
-| **5** | Should MQTT require a login? | **Yes** (press Enter). A password is generated for you; see it later with `./sitesync mqtt-info`. |
-| **6** | Should MQTT traffic be encrypted? | **No** (press Enter) if the gateways are on the same network or a VPN. Yes only if they cross the public internet. |
-| **7** | Which gateway protocols does this site use? | **Yes to both** (press Enter twice) unless you have been told otherwise. Unused ones cost nothing. The REST API is no longer asked about — it is required on every SiteSync site and is always installed. |
-| **8** | Generating secrets | Nothing to answer. It generates them. |
+| #      | Question                                        | What to answer                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------ | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1**  | Who is this site for?                           | A short lowercase name, no spaces — `acme`. Then the full name for reports — `Acme Manufacturing`.                                                                                                                                                                                                                                                                                              |
+| **2**  | Which radio region?                             | From the gateway's datasheet. `US915` in North America, `EU868` in Europe. The list of valid options is printed on screen.                                                                                                                                                                                                                                                                      |
+| **2b** | Which sub-bands does this site serve?           | First it asks whether your gateways use the plain UDP packet forwarder — **almost always yes, press Enter**. Then: **press Enter at each prompt** — first sub-band, UDP port 1700, then "no" to adding another. Only add more if different gateways use different channel plans. Regions with a single frequency plan skip the rest. See below if your gateways run the MQTT Forwarder instead. |
+| **3**  | What address will people type in their browser? | **The most important answer here.** See below.                                                                                                                                                                                                                                                                                                                                                  |
+| **4**  | How should the web interface be secured?        | **Press Enter for `1) self-signed`** unless the customer already has a certificate. Browsers show a one-time warning that you click past.                                                                                                                                                                                                                                                       |
+| **5**  | Should MQTT require a login?                    | **Yes** (press Enter). A password is generated for you; see it later with `./sitesync mqtt-info`.                                                                                                                                                                                                                                                                                               |
+| **6**  | Should MQTT traffic be encrypted?               | **No** (press Enter) if the gateways are on the same network or a VPN. Yes only if they cross the public internet.                                                                                                                                                                                                                                                                              |
+| **7**  | Which gateway protocols does this site use?     | **Yes to both** (press Enter twice) unless you have been told otherwise. Unused ones cost nothing. The REST API is no longer asked about — it is required on every SiteSync site and is always installed.                                                                                                                                                                                       |
+| **8**  | Generating secrets                              | Nothing to answer. It generates them.                                                                                                                                                                                                                                                                                                                                                           |
 
 ### About question 2b — gateway bridge or MQTT Forwarder
 
@@ -359,15 +359,15 @@ They log out and back in once, and that is all.
 
 **Everyday commands**, all run from `/opt/sitesync`:
 
-| Command | What it does |
-|---|---|
-| `./sitesync status` | Is it running, and what is the address |
-| `./sitesync doctor` | Check the settings for problems |
-| `./sitesync logs` | Watch what a service is saying |
-| `./sitesync region list` | Which sub-bands this site serves |
-| `./sitesync region add` | Serve another sub-band — see below |
-| `./sitesync mqtt-info` | Show the generated MQTT username and password |
-| `nano .env` then `./sitesync apply` | Change any setting from setup |
+| Command                             | What it does                                  |
+| ----------------------------------- | --------------------------------------------- |
+| `./sitesync status`                 | Is it running, and what is the address        |
+| `./sitesync doctor`                 | Check the settings for problems               |
+| `./sitesync logs`                   | Watch what a service is saying                |
+| `./sitesync region list`            | Which sub-bands this site serves              |
+| `./sitesync region add`             | Serve another sub-band — see below            |
+| `./sitesync mqtt-info`              | Show the generated MQTT username and password |
+| `nano .env` then `./sitesync apply` | Change any setting from setup                 |
 
 ### Adding a sub-band later
 
@@ -415,16 +415,16 @@ sudo bash install.sh --redo 20
 Step 00 runs before anything is changed. A failure here means the machine is
 untouched.
 
-| Message | What it means | What to do |
-|---|---|---|
-| `this artifact was built for Ubuntu 'X' but this machine is 'Y'` | Wrong bundle for this server | Ask the office for a bundle built with `--codename Y`. The Docker packages genuinely will not work otherwise. |
-| `this machine is X but the artifact was built for Y` (architecture) | Wrong CPU architecture | Ask for a bundle built with `--arch X`. Nothing here will run. |
-| `these conflict with Docker Engine and must be removed first` | An old or different Docker is installed | Run the `apt-get remove` command it prints. For a snap: `sudo snap remove docker`. |
-| `Ignition is already installed on this machine` | A gateway is already here; this installer installs, it does not upgrade | Three choices, all printed on screen: remove it with `sudo bash uninstall.sh`, ask for a bundle built `--skip-ignition`, or install alongside with `--ignition-dir /opt/ignition-new`. |
-| `only NNNN MB free on /var/lib` | Not enough disk | See *"Not enough disk space"* below. |
-| `<file> is named in AIRGAP_INFO but is not in this folder` | The copy is incomplete | Copy the whole folder over again. Do not copy files individually. |
-| `this machine is not running systemd` | Not a normal Ubuntu Server (a container, or WSL) | This needs a real VM or physical machine. Escalate. |
-| `port(s) N are already in use` | **Warning, not a failure** | The install continues. ChirpStack's ports can be moved during setup; Ignition's 8088/8043 cannot. Find out what is holding them. |
+| Message                                                             | What it means                                                           | What to do                                                                                                                                                                             |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `this artifact was built for Ubuntu 'X' but this machine is 'Y'`    | Wrong bundle for this server                                            | Ask the office for a bundle built with `--codename Y`. The Docker packages genuinely will not work otherwise.                                                                          |
+| `this machine is X but the artifact was built for Y` (architecture) | Wrong CPU architecture                                                  | Ask for a bundle built with `--arch X`. Nothing here will run.                                                                                                                         |
+| `these conflict with Docker Engine and must be removed first`       | An old or different Docker is installed                                 | Run the `apt-get remove` command it prints. For a snap: `sudo snap remove docker`.                                                                                                     |
+| `Ignition is already installed on this machine`                     | A gateway is already here; this installer installs, it does not upgrade | Three choices, all printed on screen: remove it with `sudo bash uninstall.sh`, ask for a bundle built `--skip-ignition`, or install alongside with `--ignition-dir /opt/ignition-new`. |
+| `only NNNN MB free on /var/lib`                                     | Not enough disk                                                         | See _"Not enough disk space"_ below.                                                                                                                                                   |
+| `<file> is named in AIRGAP_INFO but is not in this folder`          | The copy is incomplete                                                  | Copy the whole folder over again. Do not copy files individually.                                                                                                                      |
+| `this machine is not running systemd`                               | Not a normal Ubuntu Server (a container, or WSL)                        | This needs a real VM or physical machine. Escalate.                                                                                                                                    |
+| `port(s) N are already in use`                                      | **Warning, not a failure**                                              | The install continues. ChirpStack's ports can be moved during setup; Ignition's 8088/8043 cannot. Find out what is holding them.                                                       |
 
 ### Not enough disk space
 
@@ -453,22 +453,22 @@ Three options, in order of preference:
 
 ### Other errors, by step
 
-| Message | Step | What to do |
-|---|---|---|
-| `must run as root: sudo bash install.sh` | — | You forgot `sudo`. Run it again with `sudo` in front. |
-| `AIRGAP_INFO missing - this folder is not a complete artifact` | — | You are in the wrong folder, or only part of it copied. `cd` into the unpacked folder; if it is incomplete, copy it again. |
-| `checksum mismatch - re-copy the whole folder` | — | The transfer corrupted something. Copy the whole `.tar` again and re-unpack. Do not try to fix individual files. |
-| `Docker Engine install failed` | 10 | Read the lines above it — this is `apt` talking. Send the log. |
-| `docker.service would not start` | 10 | Usually a `--data-root` on an unsuitable filesystem. Try without `--data-root`, or check the message for `xfs with ftype=0` / `nfs`. |
-| `only NNNN MB free on <dir>, and Ignition needs about 4096 MB` | 15 | Choose a location on a bigger disk when it asks, or free space and `--resume`. |
-| `the Ignition install failed` | 15 | Send the log. Everything before this step is fine; `--resume` after the fix. |
-| `no systemd unit was created for Ignition` | 15 | **Warning, not a failure.** A known 8.1 installer defect — the gateway runs now but will not survive a reboot. Worth fixing before you leave. Escalate. |
-| `the gateway is not answering on port 8088 yet` | 15 | **Warning, not a failure.** It can be slow on a cold first start. Check with `sudo systemctl status Ignition-Gateway` and `sudo tail -50 /usr/local/bin/ignition/logs/wrapper.log`. |
-| `these images did not load: ...` | 20 | The image bundle is incomplete or the disk filled up. Check space, then `--redo 20`. |
-| `the stack snapshot is missing <file>` | 30 | The artifact was built wrong. This is an office problem, not a site problem — ask for a rebuilt bundle. |
-| `this machine has an older install at /opt/sitesync-chirpstack` | 30 | **Warning.** An install from before Sept 2026. If it holds a configured site, stop and re-run with `--install-dir /opt/sitesync-chirpstack` to keep it. |
-| `setup did not complete` | 40 | Nothing is lost. Run it again: `cd /opt/sitesync && sudo bash setup.sh` |
-| `No terminal available, so the questions cannot be asked here` | 40 | You ran the installer with output redirected. Finish at the console: `cd /opt/sitesync && sudo bash setup.sh` |
+| Message                                                         | Step | What to do                                                                                                                                                                          |
+| --------------------------------------------------------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `must run as root: sudo bash install.sh`                        | —    | You forgot `sudo`. Run it again with `sudo` in front.                                                                                                                               |
+| `AIRGAP_INFO missing - this folder is not a complete artifact`  | —    | You are in the wrong folder, or only part of it copied. `cd` into the unpacked folder; if it is incomplete, copy it again.                                                          |
+| `checksum mismatch - re-copy the whole folder`                  | —    | The transfer corrupted something. Copy the whole `.tar` again and re-unpack. Do not try to fix individual files.                                                                    |
+| `Docker Engine install failed`                                  | 10   | Read the lines above it — this is `apt` talking. Send the log.                                                                                                                      |
+| `docker.service would not start`                                | 10   | Usually a `--data-root` on an unsuitable filesystem. Try without `--data-root`, or check the message for `xfs with ftype=0` / `nfs`.                                                |
+| `only NNNN MB free on <dir>, and Ignition needs about 4096 MB`  | 15   | Choose a location on a bigger disk when it asks, or free space and `--resume`.                                                                                                      |
+| `the Ignition install failed`                                   | 15   | Send the log. Everything before this step is fine; `--resume` after the fix.                                                                                                        |
+| `no systemd unit was created for Ignition`                      | 15   | **Warning, not a failure.** A known 8.1 installer defect — the gateway runs now but will not survive a reboot. Worth fixing before you leave. Escalate.                             |
+| `the gateway is not answering on port 8088 yet`                 | 15   | **Warning, not a failure.** It can be slow on a cold first start. Check with `sudo systemctl status Ignition-Gateway` and `sudo tail -50 /usr/local/bin/ignition/logs/wrapper.log`. |
+| `these images did not load: ...`                                | 20   | The image bundle is incomplete or the disk filled up. Check space, then `--redo 20`.                                                                                                |
+| `the stack snapshot is missing <file>`                          | 30   | The artifact was built wrong. This is an office problem, not a site problem — ask for a rebuilt bundle.                                                                             |
+| `this machine has an older install at /opt/sitesync-chirpstack` | 30   | **Warning.** An install from before Sept 2026. If it holds a configured site, stop and re-run with `--install-dir /opt/sitesync-chirpstack` to keep it.                             |
+| `setup did not complete`                                        | 40   | Nothing is lost. Run it again: `cd /opt/sitesync && sudo bash setup.sh`                                                                                                             |
+| `No terminal available, so the questions cannot be asked here`  | 40   | You ran the installer with output redirected. Finish at the console: `cd /opt/sitesync && sudo bash setup.sh`                                                                       |
 
 ### Starting completely over
 
