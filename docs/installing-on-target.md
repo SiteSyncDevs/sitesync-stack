@@ -154,6 +154,10 @@ The first thing it prints is the log path. **Write it down.** It looks like:
 Log: /var/log/sitesync-airgap/install-20260908-174449.log
 ```
 
+> The date and time in that filename are stamped from **this** run, so the path
+> on your screen will not match the example above. Copy down the one the
+> installer actually prints.
+
 If you have to call for help, that path is the only thing anyone will ask you
 for.
 
