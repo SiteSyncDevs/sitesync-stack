@@ -71,8 +71,8 @@ transfer program for Windows — download it from <https://winscp.net>.
    `<BUNDLE>.tar` from the left-hand (your PC) pane into it.
 4. Wait for the transfer to finish — the file is several gigabytes.
 
-Then open a terminal on the server (PuTTY, Windows Terminal, or the server's
-own keyboard) and continue at Step 2.
+WinSCP only moves the file — it does not run the installer. Continue at Step 2
+to get a terminal on the server.
 
 ### Option B — SCP from a Mac, Linux, or Windows terminal
 
@@ -80,12 +80,6 @@ From your own machine's terminal, in the folder holding the file:
 
 ```bash
 scp <BUNDLE>.tar <USER>@<SERVER>:~/
-```
-
-Then connect to the server:
-
-```bash
-ssh <USER>@<SERVER>
 ```
 
 ### Option C — USB stick at the server
@@ -96,9 +90,29 @@ desktop file manager. On a server with no desktop, find the mount point with
 
 ---
 
-## Step 2 — Unpack it
+## Step 2 — Get a terminal on the server, and unpack it
 
-In the terminal **on the server**:
+Everything from here runs **on the server**, not on your own machine.
+
+**If you are sitting at the server**, log in at its keyboard — you already have
+a terminal.
+
+**Otherwise, connect over SSH.** From a Mac or Linux terminal, or from Windows
+Terminal / PowerShell / Command Prompt:
+
+```bash
+ssh <USER>@<SERVER>
+```
+
+Type your password when asked; nothing appears on screen as you type. If it
+warns about an unknown host key the first time, that is normal for a new server
+— type `yes` and press Enter.
+
+On Windows you can use **PuTTY** instead (<https://putty.org>): enter
+`<SERVER>` as the Host Name, leave the port at `22`, click **Open**, then log in
+as `<USER>`.
+
+Now unpack the file:
 
 ```bash
 cd ~
