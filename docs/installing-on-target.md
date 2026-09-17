@@ -2,12 +2,23 @@
 
 This is the guide for the person standing in front of the customer's server.
 
-You will be given **one file** — something like
-`airgap-noble-cs4.11.0-20260908.tar`. Everything needed is inside it. The
-server does **not** need an internet connection at any point.
+You will be given **one file** — a `.tar` file whose name starts with
+`airgap-`. Everything needed is inside it. The server does **not** need an
+internet connection at any point.
 
 You do not need to know Linux. Every command you need is written out below.
-Type them exactly, or copy and paste them.
+Copy and paste them, then replace the placeholders.
+
+> **About the placeholders.** Commands in this guide contain `<ANGLE-BRACKET>`
+> placeholders. Replace the whole thing, brackets included, with your real
+> value. Nothing you paste should still have `<` or `>` in it.
+>
+> | Placeholder | Means | Example |
+> |---|---|---|
+> | `<BUNDLE>.tar` | The file you were given | `airgap-noble-cs4.11.0-20260908.tar` |
+> | `<BUNDLE>` | The same name without `.tar` | `airgap-noble-cs4.11.0-20260908` |
+> | `<USER>` | Your login name on the server | `siteadmin` |
+> | `<SERVER>` | The server's IP or DNS name | `192.168.1.50` |
 
 ---
 
@@ -15,7 +26,8 @@ Type them exactly, or copy and paste them.
 
 You need:
 
-- [ ] The `.tar` file, on a USB stick or already copied to the server
+- [ ] The `.tar` file — on your laptop, on a USB stick, or already copied to
+      the server
 - [ ] A terminal on the server — either at the keyboard, or over SSH
 - [ ] An account on the server that can use `sudo`
 - [ ] Its password
@@ -39,26 +51,48 @@ Set aside **30–60 minutes**. Most of that is waiting.
 
 ## Step 1 — Get the file onto the server
 
-**If you are sitting at the server** with a USB stick, copy the file into your
-home folder using the file manager, or plug it in and run:
+The file needs to end up in your **home folder** on the server (`/home/<USER>`,
+which the terminal writes as `~`). Pick whichever of these suits you.
+
+### Option A — WinSCP from a Windows machine (easiest)
+
+This is the right choice for most people. WinSCP is a free drag-and-drop file
+transfer program for Windows — download it from <https://winscp.net>.
+
+1. Open WinSCP. In the login dialog:
+   - **File protocol:** `SFTP`
+   - **Host name:** `<SERVER>`
+   - **Port number:** `22`
+   - **User name:** `<USER>`
+   - **Password:** your password
+2. Click **Login**. If it warns about an unknown host key the first time, that
+   is normal for a new server — click **Yes**.
+3. The right-hand pane opens in your home folder on the server. Drag
+   `<BUNDLE>.tar` from the left-hand (your PC) pane into it.
+4. Wait for the transfer to finish — the file is several gigabytes.
+
+Then open a terminal on the server (PuTTY, Windows Terminal, or the server's
+own keyboard) and continue at Step 2.
+
+### Option B — SCP from a Mac, Linux, or Windows terminal
+
+From your own machine's terminal, in the folder holding the file:
 
 ```bash
-cp /media/*/airgap-*.tar ~/
+scp <BUNDLE>.tar <USER>@<SERVER>:~/
 ```
 
-**If you are working from your own laptop over the network**, from your
-laptop's terminal:
+Then connect to the server:
 
 ```bash
-scp airgap-noble-cs4.11.0-20260908.tar youruser@192.168.1.50:~/
+ssh <USER>@<SERVER>
 ```
 
-Replace the filename, the username and the IP with the real ones. Then connect
-to the server:
+### Option C — USB stick at the server
 
-```bash
-ssh youruser@192.168.1.50
-```
+Plug the stick in and copy `<BUNDLE>.tar` into your home folder using the
+desktop file manager. On a server with no desktop, find the mount point with
+`lsblk` or `ls /media/$USER/`, then copy it across.
 
 ---
 
@@ -68,15 +102,19 @@ In the terminal **on the server**:
 
 ```bash
 cd ~
-tar xf airgap-noble-cs4.11.0-20260908.tar
+ls *.tar
 ```
 
-Use the real filename. If you are not sure what it is, `ls *.tar` lists it.
-
-This creates a folder with the same name. Go into it:
+That prints the exact filename — use it in place of `<BUNDLE>.tar` below.
 
 ```bash
-cd airgap-noble-cs4.11.0-20260908
+tar xf <BUNDLE>.tar
+```
+
+This creates a folder with the same name, minus `.tar`. Go into it:
+
+```bash
+cd <BUNDLE>
 ```
 
 Have a look at what you have — this is optional but takes two seconds:
@@ -226,12 +264,13 @@ Those gateways each need an MQTT login, which you create after the install:
 
 ```bash
 cd /opt/sitesync
-./sitesync mqtt add gw-north gateway
+./sitesync mqtt add <GATEWAY-NAME> gateway
 ```
 
-That prints the username and password once. Put them into the gateway's
-forwarder configuration, along with the sub-band name (`us915_0`) as its topic
-prefix.
+`<GATEWAY-NAME>` is any short label you choose for that gateway — `gw-north`,
+say. That prints the username and password once. Put them into the gateway's
+forwarder configuration, along with the sub-band name (`us915_0` for example)
+as its topic prefix.
 
 If you are not sure which one you have, it is a bridge. Ask before choosing the
 other.
@@ -268,13 +307,13 @@ things.
 **ChirpStack**, reachable at the address you gave in question 3:
 
 ```
-https://192.168.1.50
+https://<SERVER>
 ```
 
 **Ignition**, on port 8088:
 
 ```
-http://192.168.1.50:8088
+http://<SERVER>:8088
 ```
 
 Open both in a browser to confirm.
@@ -313,7 +352,7 @@ it does not belong to whoever happened to install it. For each person who
 should be able to run `./sitesync` without `sudo`:
 
 ```bash
-sudo usermod -aG sitesync,docker THEIR_NAME
+sudo usermod -aG sitesync,docker <THEIR-USERNAME>
 ```
 
 They log out and back in once, and that is all.
