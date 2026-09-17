@@ -135,7 +135,12 @@ ok "every archive named in AIRGAP_INFO is present"
 # --- ports we are about to want ---------------------------------------------
 if command -v ss >/dev/null 2>&1; then
   WANT_PORTS=()
-  if (( DO_CHIRPSTACK )); then WANT_PORTS+=(80 443 1883); fi
+  # The ports the stack actually publishes: the web interface, the REST API and
+  # MQTT. Ports 80 and 443 are deliberately NOT here -- nothing binds them
+  # unless the tech picks TLS_MODE=letsencrypt at setup, which this script runs
+  # too early to know about. Warning on them would flag the ports that are free
+  # and stay quiet about the ones that are not.
+  if (( DO_CHIRPSTACK )); then WANT_PORTS+=(8080 8090 1883); fi
   # Ignition's gateway (8088) and its TLS port (8043). Unlike ChirpStack's,
   # these are not something setup.sh can move later, so a clash here matters
   # more -- but it is still a warning: the tech may be about to stop whatever
@@ -149,7 +154,8 @@ if command -v ss >/dev/null 2>&1; then
   done
   if (( ${#BUSY[@]} )); then
     warn "port(s) ${BUSY[*]} are already in use by something else on this machine."
-    warn "the installer continues; you can move ChirpStack's ports during setup."
+    warn "the installer continues; ChirpStack's ports can be changed afterwards in"
+    warn "  /opt/sitesync/.env (WEB_PORT, REST_API_PORT, MQTT_PORT) then ./sitesync apply."
     for p in "${BUSY[@]}"; do
       [[ "$p" == 8088 || "$p" == 8043 ]] && \
         warn "  port $p is Ignition's and is NOT configurable during this install."

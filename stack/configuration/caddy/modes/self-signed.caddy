@@ -5,12 +5,10 @@
 # (chirpstack.acme.local) or an IP address (192.168.1.50). The certificate is
 # issued for that value, so if it does not match, the warning will not go away.
 
-# The second address is the same site on 8080, where techs habitually look --
-# upstream chirpstack-docker publishes ChirpStack's UI there. Both addresses
-# are on this one site block so there is no second copy to keep in step.
-# A tech who types http://host:8080 out of habit gets Caddy's redirect to the
-# https form of the same port, rather than a failed handshake.
-https://{$SITE_DOMAIN}, https://{$SITE_DOMAIN}:{$WEB_ALT_PORT} {
+# One address, on WEB_PORT (8080 by default). Ports 80 and 443 are not bound
+# at all -- not by Caddy, not by the container -- so there is nothing to
+# redirect from and nothing for the tech to choose between.
+https://{$SITE_DOMAIN}:{$WEB_PORT} {
 	tls internal
 	reverse_proxy chirpstack:8080
 }
@@ -18,8 +16,4 @@ https://{$SITE_DOMAIN}, https://{$SITE_DOMAIN}:{$WEB_ALT_PORT} {
 https://{$SITE_DOMAIN}:8090 {
 	tls internal
 	reverse_proxy chirpstack-rest-api:8090
-}
-
-http://{$SITE_DOMAIN} {
-	redir https://{host}{uri} permanent
 }

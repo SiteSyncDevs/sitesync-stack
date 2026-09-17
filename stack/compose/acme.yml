@@ -1,0 +1,25 @@
+# =============================================================================
+#  compose/acme.yml -- ports 80 and 443, for TLS_MODE=letsencrypt only.
+#
+#  The site is served on WEB_PORT (8080) in every mode. Let's Encrypt is the
+#  one thing that cannot live there: the ACME server connects to port 80 on
+#  this machine's public name to prove the machine owns it, and it does that
+#  again at every renewal. No port 80, no certificate -- and in 60 days, no
+#  working site.
+#
+#  So this file exists to be added ONLY when that mode is chosen:
+#
+#      COMPOSE_FILE=docker-compose.yml:compose/gateways.yml:compose/acme.yml
+#
+#  setup.sh writes that line for you when you pick letsencrypt. Every other
+#  mode leaves it out, and 80 and 443 stay unbound.
+#
+#  These ports are for ACME, not for people. The address you hand the customer
+#  is still https://<host>:8080.
+# =============================================================================
+
+services:
+  caddy:
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:80:80"
+      - "${BIND_ADDRESS:-0.0.0.0}:443:443"

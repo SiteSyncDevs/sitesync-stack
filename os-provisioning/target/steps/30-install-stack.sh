@@ -133,6 +133,12 @@ fi
 # Prove the snapshot is complete rather than discovering it at first start.
 for required in docker-compose.yml sitesync setup.sh .env.example \
                 scripts/lib-regions.sh \
+                compose/acme.yml \
+                configuration/caddy/Caddyfile \
+                configuration/caddy/modes/self-signed.caddy \
+                configuration/caddy/modes/off.caddy \
+                configuration/caddy/modes/letsencrypt.caddy \
+                configuration/caddy/modes/custom.caddy \
                 configuration/chirpstack/chirpstack.toml.template \
                 configuration/mosquitto/config/mosquitto.conf \
                 configuration/postgresql/initdb; do

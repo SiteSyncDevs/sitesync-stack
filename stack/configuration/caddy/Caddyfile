@@ -12,6 +12,14 @@
 	# exists and is perfectly valid. This tells Caddy what to assume when
 	# SNI is absent, which is always the address this site is reached at.
 	default_sni {$SITE_DOMAIN}
+
+	# This site lives on WEB_PORT and nothing else. Left alone, Caddy would
+	# also open port 80 inside the container to redirect http -> https; that
+	# port is not published on the host, so nothing would reach it, but a
+	# listener nobody can use is just something to explain later. Turning the
+	# redirects off keeps 80 free for the one case that needs it -- ACME in
+	# TLS_MODE=letsencrypt, which Caddy still serves from here.
+	auto_https disable_redirects
 }
 
 import /etc/caddy/modes/{$TLS_MODE}.caddy

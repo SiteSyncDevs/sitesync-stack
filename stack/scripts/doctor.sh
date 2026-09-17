@@ -112,14 +112,33 @@ else
   if [[ ! -f compose/gateways.yml ]]; then
     note "compose/gateways.yml has not been generated yet; ./sitesync apply creates it."
   fi
+  # Built from TLS_MODE, not hardcoded: telling a letsencrypt site to paste the
+  # two-file value would quietly drop compose/acme.yml and break its renewals,
+  # which is exactly what the check further down complains about.
+  _WANT_CF="docker-compose.yml:compose/gateways.yml"
+  [[ "${TLS_MODE:-}" == "letsencrypt" ]] && _WANT_CF="$_WANT_CF:compose/acme.yml"
   case "${COMPOSE_FILE:-}" in
     *compose/gateways.yml*) ;;
     "") bad "COMPOSE_FILE is not set in .env. It must be:
-                COMPOSE_FILE=docker-compose.yml:compose/gateways.yml
+                COMPOSE_FILE=$_WANT_CF
             Without it Docker ignores the gateway bridges entirely." ;;
     *)  bad "COMPOSE_FILE does not include compose/gateways.yml, so the gateway
             bridges are ignored. It should be:
-                COMPOSE_FILE=docker-compose.yml:compose/gateways.yml" ;;
+                COMPOSE_FILE=$_WANT_CF" ;;
+  esac
+
+  # The other direction: acme.yml left behind after a site moved off
+  # letsencrypt. Nothing fails, which is the problem -- ports 80 and 443 stay
+  # bound for no reason on a machine that is supposed to leave them free.
+  case "${COMPOSE_FILE:-}" in
+    *compose/acme.yml*)
+      if [[ "${TLS_MODE:-}" != "letsencrypt" ]]; then
+        bad "COMPOSE_FILE still includes compose/acme.yml, but TLS_MODE is
+            '${TLS_MODE:-empty}'. That file exists only so Let's Encrypt can
+            validate on ports 80 and 443; with any other mode it binds those
+            two ports and serves nothing. Drop it:
+                COMPOSE_FILE=$_WANT_CF"
+      fi ;;
   esac
 fi
 
@@ -162,8 +181,17 @@ case "${TLS_MODE:-}" in
       fi
     fi
     [[ -n "${TLS_EMAIL:-}" ]] || bad "TLS_MODE=letsencrypt requires TLS_EMAIL to be filled in."
-    [[ "${HTTP_PORT:-80}"  == "80"  ]] || bad "TLS_MODE=letsencrypt requires HTTP_PORT=80 (currently ${HTTP_PORT})."
-    [[ "${HTTPS_PORT:-443}" == "443" ]] || bad "TLS_MODE=letsencrypt requires HTTPS_PORT=443 (currently ${HTTPS_PORT})."
+    # The site is served on WEB_PORT like every other mode, but ACME has to
+    # answer on 80 to prove this machine owns the name -- at issue AND at
+    # every renewal 60 days later. compose/acme.yml is what publishes it.
+    case "${COMPOSE_FILE:-}" in
+      *compose/acme.yml*) ok "compose/acme.yml is loaded, so ports 80 and 443 are published for ACME." ;;
+      *) bad "TLS_MODE=letsencrypt but COMPOSE_FILE does not include compose/acme.yml,
+            so ports 80 and 443 are not published and Let's Encrypt cannot reach
+            this machine to validate. The certificate will fail to issue, or a
+            working one will fail to renew in 60 days. It should be:
+                COMPOSE_FILE=docker-compose.yml:compose/gateways.yml:compose/acme.yml" ;;
+    esac
     ;;
   custom)
     for f in "${TLS_CERT_FILE:-cert.pem}" "${TLS_KEY_FILE:-key.pem}"; do
@@ -182,7 +210,7 @@ esac
 # and aborts the handshake. That failure is invisible to every other check here.
 if [[ "${TLS_MODE:-}" != "off" ]] && command -v openssl >/dev/null 2>&1 \
    && command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  _hp="${HTTPS_PORT:-443}"
+  _hp="${WEB_PORT:-8080}"
   if timeout 5 bash -c "exec 3<>/dev/tcp/127.0.0.1/$_hp" 2>/dev/null; then
     _named=0 _bare=0
     timeout 8 openssl s_client -connect "127.0.0.1:$_hp" -servername "$DOMAIN" \
@@ -331,7 +359,10 @@ fi
 if command -v ss >/dev/null 2>&1; then
   RUNNING_PORTS="$(docker compose ps -q 2>/dev/null | wc -l)"
   if [[ "$RUNNING_PORTS" == "0" ]]; then
-    for p in "${HTTP_PORT:-80}" "${HTTPS_PORT:-443}" "${MQTT_PORT:-1883}"; do
+    # Every port this stack actually publishes. 80 and 443 are not in the list
+    # because nothing binds them unless compose/acme.yml is loaded, and that
+    # case is checked with the rest of the letsencrypt requirements above.
+    for p in "${WEB_PORT:-8080}" "${REST_API_PORT:-8090}" "${MQTT_PORT:-1883}"; do
       ss -ltnH "sport = :$p" 2>/dev/null | grep -q . \
         && bad "Port $p is already used by something else on this machine. Pick a different port in .env." \
         || true

@@ -5,10 +5,10 @@
 #     certs/key.pem     the private key, not password protected
 # If your files are named differently, set TLS_CERT_FILE and TLS_KEY_FILE.
 
-# 8080 is served as well as 443 -- see self-signed.caddy for why. Your
+# One address, on WEB_PORT (8080 by default) -- see self-signed.caddy. Your
 # certificate needs to cover SITE_DOMAIN; the port is not part of what a
-# certificate certifies, so nothing extra is required for 8080.
-https://{$SITE_DOMAIN}, https://{$SITE_DOMAIN}:{$WEB_ALT_PORT} {
+# certificate certifies, so 8080 needs nothing extra.
+https://{$SITE_DOMAIN}:{$WEB_PORT} {
 	tls /certs/{$TLS_CERT_FILE} /certs/{$TLS_KEY_FILE}
 	reverse_proxy chirpstack:8080
 }
@@ -16,8 +16,4 @@ https://{$SITE_DOMAIN}, https://{$SITE_DOMAIN}:{$WEB_ALT_PORT} {
 https://{$SITE_DOMAIN}:8090 {
 	tls /certs/{$TLS_CERT_FILE} /certs/{$TLS_KEY_FILE}
 	reverse_proxy chirpstack-rest-api:8090
-}
-
-http://{$SITE_DOMAIN} {
-	redir https://{host}{uri} permanent
 }

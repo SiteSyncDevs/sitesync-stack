@@ -322,10 +322,10 @@ It asks **"Start the site now"** — say **yes** (press Enter).
 Step 50 runs automatically and prints a summary. You are looking for two
 things.
 
-**ChirpStack**, reachable at the address you gave in question 3:
+**ChirpStack**, on port 8080, at the address you gave in question 3:
 
 ```
-https://<HOSTNAME/IP>
+https://<HOSTNAME/IP>:8080
 ```
 
 **Ignition**, on port 8088:
@@ -334,7 +334,23 @@ https://<HOSTNAME/IP>
 http://<HOSTNAME/IP>:8088
 ```
 
-Open both in a browser to confirm.
+The summary prints both addresses in full. Copy what it prints — that is the
+one to hand the customer.
+
+> **Type the port.** ChirpStack answers on **8080 only**. Nothing is listening
+> on the plain address without `:8080`, so leaving the port off gets you a
+> browser error rather than the login page. This is deliberate: ports 80 and
+> 443 are left free on the machine.
+
+> **The certificate warning is expected.** If you accepted the default at
+> question 4, ChirpStack uses a self-signed certificate, so the browser shows a
+> warning the first time — "not private", "not secure", or similar. Click
+> **Advanced**, then **Proceed**. This is not a fault and does not mean the
+> install failed. It goes away once the customer supplies a real certificate.
+>
+> If you chose **off** at question 4, the address is `http://` instead of
+> `https://` — same port, no warning. The scheme is the only thing that
+> question changes.
 
 > **Important — do this before you leave.** The first visit to the Ignition
 > address runs the commissioning wizard, where the admin password is set.
@@ -442,7 +458,7 @@ untouched.
 | `only NNNN MB free on /var/lib`                                     | Not enough disk                                                         | See _"Not enough disk space"_ below.                                                                                                                                                   |
 | `<file> is named in AIRGAP_INFO but is not in this folder`          | The copy is incomplete                                                  | Copy the whole folder over again. Do not copy files individually.                                                                                                                      |
 | `this machine is not running systemd`                               | Not a normal Ubuntu Server (a container, or WSL)                        | This needs a real VM or physical machine. Escalate.                                                                                                                                    |
-| `port(s) N are already in use`                                      | **Warning, not a failure**                                              | The install continues. ChirpStack's ports can be moved during setup; Ignition's 8088/8043 cannot. Find out what is holding them.                                                       |
+| `port(s) N are already in use`                                      | **Warning, not a failure**                                              | The install continues. ChirpStack's port can be changed afterwards (`WEB_PORT` in `.env`, then `./sitesync apply`); Ignition's 8088/8043 cannot. Find out what is holding them.                                                       |
 
 ### Not enough disk space
 

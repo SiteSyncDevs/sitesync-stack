@@ -404,9 +404,12 @@ p "                  Browsers show a one-time warning you click past."
 p "                  RECOMMENDED unless you already have a certificate."
 p "  2) off          Plain HTTP. Only for a trusted, private network."
 p "  3) letsencrypt  Real trusted HTTPS, free and automatic -- but needs a public"
-p "                  domain name pointing here and ports 80 and 443 open."
+p "                  domain name pointing here, and ports 80 and 443 reachable"
+p "                  from the internet so the certificate can be renewed."
 p "  4) custom       You already have a certificate file to use."
 p ""
+p "This does not change the address. The site is on port 8080 in every case;"
+p "only http:// or https:// changes."
 p "You can switch between these later by changing one word in .env."
 case "$(ask 'Choose' '1')" in
   2) TLS_MODE=off ;;
@@ -415,6 +418,16 @@ case "$(ask 'Choose' '1')" in
   *) TLS_MODE=self-signed ;;
 esac
 set_var TLS_MODE "$TLS_MODE"
+
+# Only letsencrypt publishes ports 80 and 443, and only because ACME has to
+# answer there to issue and renew. Every other mode leaves them unbound, so
+# this is rewritten both ways -- a site switched away from letsencrypt later
+# must not keep binding them.
+if [[ "$TLS_MODE" == letsencrypt ]]; then
+  set_var COMPOSE_FILE "docker-compose.yml:compose/gateways.yml:compose/acme.yml"
+else
+  set_var COMPOSE_FILE "docker-compose.yml:compose/gateways.yml"
+fi
 
 if [[ "$TLS_MODE" == letsencrypt ]]; then
   p ""

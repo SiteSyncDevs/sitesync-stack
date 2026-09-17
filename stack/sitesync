@@ -34,30 +34,22 @@ require_docker() {
   docker compose version >/dev/null 2>&1 || die "This machine has Docker but not the Compose plugin. Install docker-compose-plugin."
 }
 
-# The URL a person should type in their browser.
+# The URL a person should type in their browser. There is exactly one: the
+# site is always on WEB_PORT, and TLS_MODE only decides the scheme. The port
+# is always printed, even when it is the default 8080, because a tech who is
+# told the address in full never has to wonder whether a port was implied.
 site_url() {
-  local scheme=https port="${HTTPS_PORT:-443}"
-  if [[ "${TLS_MODE:-self-signed}" == "off" ]]; then scheme=http; port="${HTTP_PORT:-80}"; fi
-  if [[ ( "$scheme" == "https" && "$port" == "443" ) || ( "$scheme" == "http" && "$port" == "80" ) ]]; then
-    echo "$scheme://${SITE_DOMAIN:-localhost}"
-  else
-    echo "$scheme://${SITE_DOMAIN:-localhost}:$port"
-  fi
-}
-
-# The same site on WEB_ALT_PORT, or nothing if that port is turned off.
-site_alt_url() {
-  local scheme=https p="${WEB_ALT_PORT:-}"
-  [[ -n "$p" ]] || return 0
+  local scheme=https
   [[ "${TLS_MODE:-self-signed}" == "off" ]] && scheme=http
-  echo "$scheme://${SITE_DOMAIN:-localhost}:$p"
+  echo "$scheme://${SITE_DOMAIN:-localhost}:${WEB_PORT:-8080}"
 }
 
 # Everything a person needs to connect something to this site, in one block.
 #
 # This exists because the install used to end without it. Techs finished a
 # working install and then had to guess the web port (they tried :8080, because
-# that is what upstream chirpstack-docker uses), guess the MQTT port, and ask
+# that is what upstream chirpstack-docker uses -- which is now the answer),
+# guess the MQTT port, and ask
 # someone for the MQTT password -- which then got written into a document, which
 # is the one place a generated per-site password must never end up.
 cmd_info() {
@@ -65,8 +57,6 @@ cmd_info() {
   bold "How to connect to ${SITE_LABEL:-this site}"
   echo
   info "  Web interface   $(site_url)"
-  local alt; alt="$(site_alt_url)"
-  [[ -n "$alt" ]] && info "                  $alt   (same site, for habit)"
   if [[ "${TLS_MODE:-}" == "self-signed" ]]; then
     info "                  your browser warns once about the certificate -- expected"
   fi
@@ -260,8 +250,6 @@ cmd_status() {
   "${DC[@]}" ps --format 'table {{.Service}}\t{{.Status}}' || true
   echo
   info "Web interface:  $(site_url)"
-  local _alt; _alt="$(site_alt_url)"
-  [[ -n "$_alt" ]] && info "                $_alt   (same site)"
   if [[ "${TLS_MODE:-}" == "self-signed" ]]; then
     info "                (your browser will warn once about the certificate -- that is expected)"
   fi

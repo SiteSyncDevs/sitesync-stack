@@ -310,12 +310,19 @@ How the web interface is secured. Change the word, run `./sitesync apply`.
 | --- | --- | --- |
 | `self-signed` | nothing at all | HTTPS immediately; a one-time browser warning |
 | `off` | nothing at all | plain HTTP, no encryption |
-| `letsencrypt` | a public domain pointing here, ports 80 + 443 open | real trusted HTTPS, renews itself |
+| `letsencrypt` | a public domain pointing here, ports 80 + 443 open, and `compose/acme.yml` on `COMPOSE_FILE` | real trusted HTTPS, renews itself |
 | `custom` | your own `certs/cert.pem` and `certs/key.pem` | HTTPS with your certificate |
+
+`TLS_MODE` changes the scheme, never the address. The site is served on
+`WEB_PORT` (8080) in all four modes — `https://<host>:8080`, or
+`http://<host>:8080` when the mode is `off`.
 
 **No customer is ever required to obtain a certificate.** `self-signed` is the
 default and works on a machine with no domain name and no internet connection.
-Moving to `letsencrypt` later is a one-word change; nothing else moves.
+Moving to `letsencrypt` later is a one-word change plus `compose/acme.yml` on
+`COMPOSE_FILE` — `setup.sh` writes both, and `./sitesync doctor` fails loudly
+if the mode is set without the overlay, because the certificate would issue and
+then quietly fail to renew 60 days later.
 
 Run `./sitesync ca` to export the self-signed certificate and install it on the
 handful of computers that use the interface — the warning then disappears
@@ -503,8 +510,19 @@ make import-device-profiles
 
 ## Notes for whoever maintains this
 
-- The stack is reached through Caddy, which owns ports 80/443 and the REST API
-  port. ChirpStack's own 8080 is deliberately not published.
+- The stack is reached through Caddy, which publishes exactly two host ports:
+  `WEB_PORT` (8080) and `REST_API_PORT` (8090). Ports 80 and 443 are **not**
+  bound — not by Caddy, not by anything else here — so they stay free on the
+  customer's machine. `auto_https disable_redirects` in the Caddyfile turns off
+  the generated http→https redirect routes, which nothing could have reached
+  anyway. It does **not** disable ACME: Caddy still serves the HTTP-01
+  challenge on port 80 inside the container, which is what makes the single
+  exception work — `TLS_MODE=letsencrypt`, where `compose/acme.yml` publishes
+  80 and 443 purely so the certificate can be issued and renewed.
+- Caddy publishes 8080 as a same-number mapping and listens on `WEB_PORT`
+  inside the container too, so changing the variable moves both ends at once.
+  ChirpStack's own container port 8080 is still not published; Caddy proxies
+  to it over the compose network.
 - Postgres and Redis have healthchecks and ChirpStack waits on them, which
   fixes the start-up race in the upstream compose file.
 - Container logs are capped by `LOG_MAX_SIZE` and `LOG_MAX_FILES` so an
