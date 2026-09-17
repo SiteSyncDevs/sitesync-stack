@@ -13,12 +13,12 @@ Copy and paste them, then replace the placeholders.
 > placeholders. Replace the whole thing, brackets included, with your real
 > value. Nothing you paste should still have `<` or `>` in it.
 >
-> | Placeholder    | Means                         | Example                              |
-> | -------------- | ----------------------------- | ------------------------------------ |
-> | `<BUNDLE>.tar` | The file you were given       | `airgap-noble-cs4.11.0-20260908.tar` |
-> | `<BUNDLE>`     | The same name without `.tar`  | `airgap-noble-cs4.11.0-20260908`     |
-> | `<USER>`       | Your login name on the server | `siteadmin`                          |
-> | `<SERVER>`     | The server's IP or DNS name   | `192.168.1.50`                       |
+> | Placeholder     | Means                         | Example                              |
+> | --------------- | ----------------------------- | ------------------------------------ |
+> | `<BUNDLE>.tar`  | The file you were given       | `airgap-noble-cs4.11.0-20260908.tar` |
+> | `<BUNDLE>`      | The same name without `.tar`  | `airgap-noble-cs4.11.0-20260908`     |
+> | `<USER>`        | Your login name on the server | `siteadmin`                          |
+> | `<HOSTNAME/IP>` | The server's DNS name or IP   | `192.168.1.50`                       |
 
 ---
 
@@ -61,7 +61,7 @@ transfer program for Windows — download it from <https://winscp.net>.
 
 1. Open WinSCP. In the login dialog:
    - **File protocol:** `SFTP`
-   - **Host name:** `<SERVER>`
+   - **Host name:** `<HOSTNAME/IP>`
    - **Port number:** `22`
    - **User name:** `<USER>`
    - **Password:** your password
@@ -79,7 +79,7 @@ to get a terminal on the server.
 From your own machine's terminal, in the folder holding the file:
 
 ```bash
-scp <BUNDLE>.tar <USER>@<SERVER>:~/
+scp <BUNDLE>.tar <USER>@<HOSTNAME/IP>:~/
 ```
 
 ### Option C — USB stick at the server
@@ -101,7 +101,7 @@ a terminal.
 Terminal / PowerShell / Command Prompt:
 
 ```bash
-ssh <USER>@<SERVER>
+ssh <USER>@<HOSTNAME/IP>
 ```
 
 Type your password when asked; nothing appears on screen as you type. If it
@@ -109,7 +109,7 @@ warns about an unknown host key the first time, that is normal for a new server
 — type `yes` and press Enter.
 
 On Windows you can use **PuTTY** instead (<https://putty.org>): enter
-`<SERVER>` as the Host Name, leave the port at `22`, click **Open**, then log in
+`<HOSTNAME/IP>` as the Host Name, leave the port at `22`, click **Open**, then log in
 as `<USER>`.
 
 Now unpack the file:
@@ -321,13 +321,13 @@ things.
 **ChirpStack**, reachable at the address you gave in question 3:
 
 ```
-https://<SERVER>
+https://<HOSTNAME/IP>
 ```
 
 **Ignition**, on port 8088:
 
 ```
-http://<SERVER>:8088
+http://<HOSTNAME/IP>:8088
 ```
 
 Open both in a browser to confirm.
