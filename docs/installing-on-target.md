@@ -35,6 +35,16 @@ You need:
       4 GB wherever Ignition goes, and refuses to start without it. Aim for
       40 GB on the VM so you are not fighting it — see _"Not enough disk
       space"_ in Troubleshooting.
+- [ ] **Room in your home directory, on top of that.** The `.tar` file is
+      copied to your home directory and unpacked there, so the OS disk briefly
+      holds both — several GB each. This is separate from the space the
+      installer checks, and it is still true when the software itself is going
+      onto a data drive. `df -h /` before you copy the file across.
+- [ ] **If the server has a second drive for the data, prepare it first.** A
+      drive that is attached to the VM but never partitioned or mounted is
+      invisible to the installer, which will use the OS disk instead and say
+      nothing. Run `lsblk`: if a drive shows a size but no mountpoint, work
+      through `preparing-a-data-drive.md` before you start, then come back here.
 - [ ] The site's network address — a DNS name like `chirpstack.acme.local`, or
       an IP like `192.168.1.50`. You will be asked for it near the end.
 - [ ] Which **radio region** the gateways are certified for (US915, EU868, …).
@@ -476,6 +486,11 @@ Three options, in order of preference:
    ```
    The installer normally offers this on its own; you only need the flag if you
    answered no, or if the drive was mounted after you started.
+
+   **If the drive exists but the installer never offered it**, it is not
+   mounted — an attached drive with no partition and no filesystem is invisible
+   to this check. `preparing-a-data-drive.md` walks through making it usable;
+   it takes about ten minutes, and nothing you have done so far is lost.
 3. **Free space.** If this machine has been used for testing before, the usual
    culprits are old install logs and Ignition backups that the uninstaller
    deliberately keeps:

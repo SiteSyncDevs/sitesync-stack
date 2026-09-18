@@ -214,9 +214,14 @@ report_unused_disks() {
       printf '         It is NOT being used, and nothing below will be installed on it.\n\n'
       printf '         To make it a data drive before continuing, on this machine:\n'
       printf '             sudo parted /dev/%s --script mklabel gpt mkpart data ext4 0%% 100%%\n' "$dev"
-      printf '             sudo mkfs.ext4 -L sitesync-data /dev/%s1\n' "$dev"
-      printf '             echo "UUID=$(blkid -s UUID -o value /dev/%s1) /mnt/data ext4 defaults 0 2" | sudo tee -a /etc/fstab\n' "$dev"
-      printf '             sudo mkdir -p /mnt/data && sudo mount -a\n'
+      printf '             lsblk -o NAME,SIZE,TYPE /dev/%s     # read the new partition name\n' "$dev"
+      printf '             sudo mkfs.ext4 -L sitesync-data /dev/PARTITION\n'
+      printf '             sudo mkdir -p /data\n'
+      printf '             echo "UUID=$(sudo blkid -s UUID -o value /dev/PARTITION) /data ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab\n'
+      printf '             sudo mount -a && df -h /data\n'
+      printf '         The partition is usually %s1, but NVMe drives insert a p\n' "$dev"
+      printf '         (nvme0n1 -> nvme0n1p1), so read it rather than assuming.\n'
+      printf '         Full walkthrough: docs/preparing-a-data-drive.md\n'
       printf '         Then start again:  sudo bash install.sh\n'
     else
       printf '   note: /dev/%s (%d GB%s) already has a filesystem but is not mounted.\n' \
@@ -224,9 +229,10 @@ report_unused_disks() {
       printf '         Do NOT format it -- on a re-install this is usually the previous\n'
       printf '         installation'"'"'s data. Mount it and start again:\n'
       printf '             sudo blkid /dev/%s*\n' "$dev"
-      printf '             sudo mkdir -p /mnt/data\n'
-      printf '             # add the UUID to /etc/fstab, then:\n'
-      printf '             sudo mount -a\n'
+      printf '             sudo mkdir -p /data\n'
+      printf '             # add that UUID to /etc/fstab as one line:\n'
+      printf '             #   UUID=<the-uuid> /data ext4 defaults,nofail 0 2\n'
+      printf '             sudo mount -a && df -h /data\n'
     fi
   done < <(unused_disks)
   (( found )) && echo
